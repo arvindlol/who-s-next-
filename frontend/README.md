@@ -1,4 +1,4 @@
-# Sift — interview evaluation frontend
+# Who’s Next — interview evaluation frontend
 
 React + Vite frontend for the AI-assisted technical interview evaluation system.
 Glass UI, mock login/signup, and a home workspace that mirrors the SRS pipeline.

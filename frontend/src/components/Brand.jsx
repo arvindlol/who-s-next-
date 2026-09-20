@@ -9,7 +9,7 @@ export default function Brand() {
         </defs>
         <path d="M4 7h20M8 14h12M12 21h4" stroke="url(#g)" strokeWidth="3" strokeLinecap="round" />
       </svg>
-      Sift
+      Who’s Next
     </span>
   )
 }

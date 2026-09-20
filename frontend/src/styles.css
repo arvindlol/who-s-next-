@@ -127,20 +127,26 @@ button { cursor: pointer; }
 
 /* ---------- auth layout ---------- */
 .auth {
-  min-height: 100%; display: grid; grid-template-columns: 1.1fr 1fr; gap: 40px;
-  padding: 48px clamp(20px, 6vw, 96px); align-items: center;
+  min-height: 100%; display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(360px, 440px); gap: 48px;
+  padding: 48px clamp(20px, 5vw, 80px); align-items: center; justify-content: space-between;
 }
-.auth__story { max-width: 520px; }
+.auth__story { max-width: 680px; width: 100%; }
 .auth__story h1 {
-  font-size: clamp(38px, 5vw, 60px); line-height: 1.02; letter-spacing: -0.035em; font-weight: 800; margin: 28px 0 18px;
+  font-size: clamp(36px, 4.5vw, 56px); line-height: 1.05; letter-spacing: -0.035em; font-weight: 800; margin: 28px 0 18px;
 }
-.auth__story p { color: var(--ink-2); font-size: 17px; max-width: 46ch; margin: 0 0 32px; }
+.auth__story p { color: var(--ink-2); font-size: 16px; line-height: 1.5; max-width: 52ch; margin: 0 0 16px; }
+.auth__tagline {
+  color: var(--accent); font-size: 14.5px; font-weight: 600; letter-spacing: -0.01em; margin: 0 0 28px;
+}
 .flow {
-  display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; color: var(--ink-2);
+  display: flex; flex-wrap: nowrap; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: var(--ink-2);
 }
-.flow .node { padding: 7px 12px; border-radius: 999px; border: 1px solid var(--glass-line); background: var(--glass); }
+.flow .node {
+  padding: 6px 10px; border-radius: 999px; border: 1px solid var(--glass-line); background: var(--glass);
+  white-space: nowrap; flex-shrink: 0;
+}
 .flow .node--human { border-style: dashed; color: var(--ink); }
-.flow .arrow { color: var(--ink-3); }
+.flow .arrow { color: var(--ink-3); flex-shrink: 0; }
 
 .auth__card { width: min(440px, 100%); justify-self: end; padding: 32px; }
 .auth__tabs {
