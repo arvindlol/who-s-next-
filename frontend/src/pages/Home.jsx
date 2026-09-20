@@ -6,7 +6,7 @@ const PIPELINE = [
   { n: 1, title: 'Job description', desc: 'Extract the skills and responsibilities that matter.', ai: true },
   { n: 2, title: 'Resume fit', desc: 'Score each resume against the role and flag gaps.', ai: true },
   { n: 3, title: 'Interview plan', desc: 'Questions tailored to this candidate and this role.', ai: true },
-  { n: 4, title: 'Interview', desc: 'You run it. Sift stays out of the room.', ai: false },
+  { n: 4, title: 'Interview', desc: 'You run it. Who’s Next stays out of the room.', ai: false },
   { n: 5, title: 'Transcript', desc: 'Upload the transcript when you are done.', ai: true },
   { n: 6, title: 'Final report', desc: 'Structured evaluation to support your decision.', ai: true },
 ]
@@ -41,7 +41,7 @@ export default function Home() {
           <div className="hero__text">
             <span className="pill pill--live"><span className="dot" />Workspace ready</span>
             <h1 style={{ marginTop: 14 }}>Good to see you, {user?.name}.</h1>
-            <p>Start with a job description. Sift will structure it, then you can add resumes one at a time and get a fit report for each.</p>
+            <p>Start with a job description. Who’s Next will structure it, then you can add resumes one at a time and get a fit report for each.</p>
             <div className="hero__actions">
               <button className="btn btn--primary">Add job description</button>
               <button className="btn">Upload a resume</button>
@@ -55,7 +55,7 @@ export default function Home() {
         </section>
 
         <section className="section">
-          <div className="section__head"><h2>How a candidate moves through Sift</h2></div>
+          <div className="section__head"><h2>How a candidate moves through Who’s Next</h2></div>
           <div className="pipeline glass glass--lg">
             {PIPELINE.map(s => (
               <div key={s.n} className={`stage ${s.ai ? 'stage--ai' : 'stage--human'}`}>
@@ -97,7 +97,7 @@ export default function Home() {
         </section>
       </main>
 
-      <footer className="footer">Sift assists interviewers. Hiring decisions stay with you.</footer>
+      <footer className="footer">Who’s Next assists interviewers. Hiring decisions stay with you.</footer>
     </div>
   )
 }

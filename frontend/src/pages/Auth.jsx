@@ -1,33 +1,96 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import {
+  createUserWithEmailAndPassword,
+  signInWithEmailAndPassword,
+  updateProfile,
+} from 'firebase/auth'
 import Brand from '../components/Brand.jsx'
-import { useAuth } from '../auth.jsx'
+import { auth } from '../firebase.js'
+import { getAuthErrorMessage, useAuth } from '../auth.jsx'
 
 const STAGES = [
-  ['Job description', false], ['Resume fit', false], ['Interview plan', false],
-  ['Interview', true], ['Transcript', false], ['Final report', false],
+  'Check Resume Fit',
+  'Plan the Interview',
+  'Conduct Interview',
+  'Upload Transcript',
+  'Get Brief Report',
 ]
 
 export default function Auth({ mode }) {
   const isLogin = mode === 'login'
   const navigate = useNavigate()
-  const { signIn, signUp } = useAuth()
+  const { user } = useAuth()
   const [form, setForm] = useState({ name: '', email: '', password: '', confirm: '' })
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+
+  // Clear error when toggling between login and signup
+  useEffect(() => {
+    setError('')
+  }, [mode])
+
+  // If already logged in, redirect to home
+  useEffect(() => {
+    if (user) {
+      navigate('/', { replace: true })
+    }
+  }, [user, navigate])
 
   const set = k => e => setForm(f => ({ ...f, [k]: e.target.value }))
 
   const submit = async e => {
     e.preventDefault()
+    if (busy) return
     setError('')
-    if (!form.email.includes('@')) return setError('Enter a valid email address.')
-    if (form.password.length < 8) return setError('Password needs at least 8 characters.')
-    if (!isLogin && form.password !== form.confirm) return setError('Passwords do not match.')
+
+    const email = form.email.trim()
+    const password = form.password
+    const name = form.name.trim()
+
+    // 1. Required field validation
+    if (!email) {
+      return setError('Please enter your work email.')
+    }
+    if (!email.includes('@')) {
+      return setError('Please enter a valid email address.')
+    }
+    if (!password) {
+      return setError('Please enter your password.')
+    }
+
+    if (!isLogin) {
+      if (!name) {
+        return setError('Please enter your full name.')
+      }
+      if (password.length < 6) {
+        return setError('Password needs at least 6 characters.')
+      }
+      // 2. Validate Password and Confirm Password match
+      if (password !== form.confirm) {
+        return setError('Passwords do not match.')
+      }
+    }
+
     setBusy(true)
     try {
-      isLogin ? await signIn(form) : await signUp(form)
+      if (isLogin) {
+        // Sign In with Firebase Auth
+        await signInWithEmailAndPassword(auth, email, password)
+      } else {
+        // Sign Up with Firebase Auth
+        const cred = await createUserWithEmailAndPassword(auth, email, password)
+        if (name) {
+          try {
+            await updateProfile(cred.user, { displayName: name })
+          } catch (profileErr) {
+            console.warn('Could not update profile name:', profileErr)
+          }
+        }
+      }
       navigate('/')
+    } catch (err) {
+      setError(getAuthErrorMessage(err))
     } finally {
       setBusy(false)
     }
@@ -37,17 +100,18 @@ export default function Auth({ mode }) {
     <main className="auth">
       <section className="auth__story">
         <Brand />
-        <h1>Interview with a plan, not a guess.</h1>
+        <h1>You lead the Interview. We help you prepare.</h1>
         <p>
-          Sift reads the job description and each resume, writes a candidate-specific
-          interview plan, and turns the transcript into a structured evaluation. You still
-          run the interview and make the call.
+          Who’s Next analyzes the role and candidate to help you ask better questions and turn interviews into meaningful insights.
         </p>
-        <div className="flow" aria-label="How Sift works">
-          {STAGES.map(([label, human], i) => (
+        <p className="auth__tagline">
+          Prepare better. Ask smarter. Hire with clarity.
+        </p>
+        <div className="flow" aria-label="How Who's Next works">
+          {STAGES.map((label, i) => (
             <span key={label} style={{ display: 'contents' }}>
               {i > 0 && <span className="arrow" aria-hidden="true">›</span>}
-              <span className={`node${human ? ' node--human' : ''}`}>{label}{human ? ' (you)' : ''}</span>
+              <span className="node">{label}</span>
             </span>
           ))}
         </div>
@@ -80,16 +144,16 @@ export default function Auth({ mode }) {
               <input id="password" type="password" value={form.password} onChange={set('password')} placeholder="••••••••" autoComplete="current-password" />
             </div>
           ) : (
-            <div className="auth__row">
+            <>
               <div className="field">
                 <label htmlFor="password">Password</label>
                 <input id="password" type="password" value={form.password} onChange={set('password')} placeholder="8+ characters" autoComplete="new-password" />
               </div>
               <div className="field">
-                <label htmlFor="confirm">Confirm</label>
+                <label htmlFor="confirm">Confirm Password</label>
                 <input id="confirm" type="password" value={form.confirm} onChange={set('confirm')} placeholder="Repeat it" autoComplete="new-password" />
               </div>
-            </div>
+            </>
           )}
           <div className="field"><span className="hint" role="alert">{error}</span></div>
           <button className="btn btn--primary btn--block" type="submit" disabled={busy}>
