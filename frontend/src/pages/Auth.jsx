@@ -1,4 +1,4 @@
-import { useState } from 'react'
+{/*import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import Brand from '../components/Brand.jsx'
 import { useAuth } from '../auth.jsx'
@@ -106,4 +106,125 @@ export default function Auth({ mode }) {
       </section>
     </main>
   )
+}
+*/}
+
+
+
+
+import { useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { useAuth } from "../auth.jsx";
+
+export default function Auth({ mode = "login" }) {
+  const navigate = useNavigate();
+
+  const { signIn, signUp } = useAuth();
+
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [name, setName] = useState("");
+
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  const isSignup = mode === "signup";
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+
+    setError("");
+
+    if (!email || !password) {
+      setError("Please enter email and password.");
+      return;
+    }
+
+    if (isSignup && !name) {
+      setError("Please enter your name.");
+      return;
+    }
+
+    try {
+      setLoading(true);
+
+      if (isSignup) {
+        await signUp({
+          email,
+          password,
+          name,
+        });
+      } else {
+        await signIn({
+          email,
+          password,
+        });
+      }
+
+      // Login/signup successful
+      navigate("/homepage", { replace: true });
+    } catch (err) {
+      setError("Something went wrong. Please try again.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="auth-container">
+      <div className="auth-box">
+        <h1>{isSignup ? "Sign Up" : "Login"}</h1>
+
+        <form onSubmit={handleSubmit}>
+          {isSignup && (
+            <input
+              type="text"
+              placeholder="Name"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+            />
+          )}
+
+          <input
+            type="email"
+            placeholder="Email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+          />
+
+          <input
+            type="password"
+            placeholder="Password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+          />
+
+          {error && <p>{error}</p>}
+
+          <button type="submit" disabled={loading}>
+            {loading
+              ? "Please wait..."
+              : isSignup
+              ? "Sign Up"
+              : "Login"}
+          </button>
+        </form>
+
+        <button
+          type="button"
+          onClick={() => {
+            if (isSignup) {
+              navigate("/login");
+            } else {
+              navigate("/signup");
+            }
+          }}
+        >
+          {isSignup
+            ? "Already have an account? Login"
+            : "Don't have an account? Sign Up"}
+        </button>
+      </div>
+    </div>
+  );
 }
