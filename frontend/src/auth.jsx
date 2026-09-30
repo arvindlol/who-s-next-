@@ -6,7 +6,8 @@ import {
   onAuthStateChanged,
   updateProfile,
 } from 'firebase/auth'
-import { auth } from './firebase.js'
+import { doc, getDoc, serverTimestamp, setDoc } from 'firebase/firestore'
+import { auth, db } from './firebase.js'
 
 const cap = s => (s ? s.charAt(0).toUpperCase() + s.slice(1) : '')
 const AuthContext = createContext(null)
@@ -54,12 +55,38 @@ function formatUser(fbUser) {
   }
 }
 
+async function syncUserProfile(fbUser, nameOverride = '') {
+  if (!fbUser) return
+
+  const userRef = doc(db, 'users', fbUser.uid)
+  const existingUser = await getDoc(userRef)
+  const emailPrefix = fbUser.email ? cap(fbUser.email.split('@')[0]) : 'User'
+  const name = nameOverride.trim() || fbUser.displayName || emailPrefix
+  const profile = {
+    uid: fbUser.uid,
+    name,
+    email: fbUser.email,
+    updatedAt: serverTimestamp(),
+  }
+
+  if (!existingUser.exists()) {
+    profile.createdAt = serverTimestamp()
+  }
+
+  await setDoc(userRef, profile, { merge: true })
+}
+
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, currentUser => {
+      if (currentUser) {
+        syncUserProfile(currentUser).catch(err => {
+          console.error('Could not sync user profile to Firestore:', err)
+        })
+      }
       setUser(formatUser(currentUser))
       setLoading(false)
     })
@@ -82,6 +109,7 @@ export function AuthProvider({ children }) {
         console.warn('Could not set displayName on user profile:', err)
       }
     }
+    await syncUserProfile(cred.user, name)
     const formatted = formatUser({
       ...cred.user,
       displayName: name?.trim() || cred.user.displayName,
