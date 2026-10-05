@@ -46,6 +46,12 @@ service cloud.firestore {
         && resource.data.ownerId == request.auth.uid;
     }
 
+    // Gemini keys are encrypted and managed only by trusted backend functions.
+    // Firebase Admin bypasses these client rules; browsers can never access this collection.
+    match /userSecrets/{userId} {
+      allow read, write: if false;
+    }
+
     match /{document=**} {
       allow read, write: if false;
     }

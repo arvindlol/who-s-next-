@@ -1,7 +1,6 @@
 import {
   collection,
   deleteField,
-  deleteDoc,
   doc,
   onSnapshot,
   orderBy,
@@ -11,7 +10,7 @@ import {
   updateDoc,
   where,
 } from 'firebase/firestore'
-import { deleteObject, getDownloadURL, ref, uploadBytesResumable } from 'firebase/storage'
+import { getDownloadURL, ref, uploadBytesResumable } from 'firebase/storage'
 import { db, storage } from '../firebase.js'
 
 export const MAX_JOB_FILE_SIZE = 10 * 1024 * 1024
@@ -51,7 +50,9 @@ export function subscribeToJobs(userId, onChange, onError) {
   return onSnapshot(
     jobsQuery,
     snapshot => {
-      const jobs = snapshot.docs.map(job => ({ id: job.id, ...job.data() }))
+      const jobs = snapshot.docs
+        .map(job => ({ id: job.id, ...job.data() }))
+        .filter(job => !['deleted', 'failed'].includes(job.status))
       onChange(jobs)
     },
     onError,
@@ -102,18 +103,16 @@ export function reopenJob(jobId) {
   })
 }
 
-export async function deleteJob(job) {
-  if (job.storagePath) {
-    try {
-      await deleteObject(ref(storage, job.storagePath))
-    } catch (error) {
-      if (error?.code !== 'storage/object-not-found') throw error
-    }
-  }
-  await deleteDoc(doc(db, 'jobs', job.id))
+export function deleteJob(jobId, userId) {
+  return updateDoc(doc(db, 'jobs', jobId), {
+    status: 'deleted',
+    deletedAt: serverTimestamp(),
+    deletedBy: userId,
+    updatedAt: serverTimestamp(),
+  })
 }
 
-export async function createJob({ userId, title, file, onProgress }) {
+export async function createJob({ userId, title, file, additionalCriteria = [], onProgress }) {
   const jobRef = doc(collection(db, 'jobs'))
   const filename = safeFilename(file.name)
   const storagePath = `users/${userId}/jobs/${jobRef.id}/${filename}`
@@ -125,6 +124,7 @@ export async function createJob({ userId, title, file, onProgress }) {
     storagePath,
     fileType: file.type || 'application/octet-stream',
     fileSize: file.size,
+    additionalCriteria,
     status: 'uploading',
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
