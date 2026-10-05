@@ -1,9 +1,10 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link, NavLink, useNavigate } from 'react-router-dom'
 import Brand from '../components/Brand.jsx'
 import { useAuth } from '../auth.jsx'
 import { subscribeToDashboardStats } from '../services/dashboard.js'
 import { subscribeToHomeJobs } from '../services/homeJobs.js'
+import { getScreenings } from '../data/screeningDemo.js'
 
 const PIPELINE = [
   { n: 1, title: 'Job description', desc: 'Extract the skills and responsibilities that matter.', ai: true },
@@ -38,9 +39,24 @@ export default function Home() {
   const [homeJobs, setHomeJobs] = useState([])
   const [homeJobsLoading, setHomeJobsLoading] = useState(true)
   const [homeJobsError, setHomeJobsError] = useState(false)
-  const [showUploadType, setShowUploadType] = useState(false)
-  const [pendingUploadFile, setPendingUploadFile] = useState(null)
-  const [draggingUpload, setDraggingUpload] = useState(false)
+  const recentCandidates = useMemo(() => {
+    const seenCandidateIds = new Set()
+    const candidates = []
+
+    getScreenings().forEach(screening => {
+      screening.results.forEach(candidate => {
+        if (seenCandidateIds.has(candidate.id)) return
+        seenCandidateIds.add(candidate.id)
+        candidates.push({
+          ...candidate,
+          jobTitle: screening.jobTitle,
+          workflowStatus: screening.status === 'completed' ? 'Screening ready' : 'Resume uploaded',
+        })
+      })
+    })
+
+    return candidates.slice(0, 3)
+  }, [])
 
   useEffect(() => {
     if (!user?.uid) return undefined
@@ -56,20 +72,6 @@ export default function Home() {
       },
     )
   }, [user?.uid])
-
-  const openUploadType = (file = null) => {
-    setPendingUploadFile(file)
-    setShowUploadType(true)
-  }
-
-  const chooseUploadType = type => {
-    const destination = type === 'job' ? '/jobs?new=true' : '/candidates?new=true'
-    navigate(destination, {
-      state: pendingUploadFile ? { pendingUploadFile } : undefined,
-    })
-    setShowUploadType(false)
-    setPendingUploadFile(null)
-  }
 
   useEffect(() => {
     if (!user?.uid) return undefined
@@ -111,7 +113,7 @@ export default function Home() {
             <p>Start with a job description. Who’s Next will structure it, then you can add resumes one at a time and get a fit report for each.</p>
             <div className="hero__actions">
               <button className="btn btn--primary" onClick={() => navigate('/jobs?new=true')}>Add job description</button>
-              <button className="btn" onClick={() => navigate('/candidates?new=true')}>Upload a resume</button>
+              <button className="btn" onClick={() => navigate('/candidates?new=true')}>Add Candidate</button>
             </div>
           </div>
           <aside
@@ -164,80 +166,31 @@ export default function Home() {
             </div>
           </div>
           <div>
-            <div className="section__head"><h2>Quick upload</h2></div>
-            <div className="upload glass glass--lg">
-              <div
-                className={`dropzone${draggingUpload ? ' dropzone--dragging' : ''}`}
-                role="button"
-                tabIndex={0}
-                onClick={() => openUploadType()}
-                onKeyDown={event => {
-                  if (event.key === 'Enter' || event.key === ' ') {
-                    event.preventDefault()
-                    openUploadType()
-                  }
-                }}
-                onDragEnter={event => {
-                  event.preventDefault()
-                  setDraggingUpload(true)
-                }}
-                onDragOver={event => event.preventDefault()}
-                onDragLeave={event => {
-                  if (!event.currentTarget.contains(event.relatedTarget)) setDraggingUpload(false)
-                }}
-                onDrop={event => {
-                  event.preventDefault()
-                  setDraggingUpload(false)
-                  const file = event.dataTransfer.files?.[0]
-                  if (file) openUploadType(file)
-                }}
-              >
-                <b>Drop a job description or resume here</b>
-                PDF, DOCX or TXT
-              </div>
-              <small>Files are stored privately in your workspace and never shared with other users.</small>
-              <button className="btn btn--block" onClick={() => openUploadType()}>Choose upload type</button>
+            <div className="section__head"><h2>Your Candidates</h2><Link to="/candidates">View all</Link></div>
+            <div className="home-candidates glass glass--lg">
+              {recentCandidates.length === 0 ? (
+                <div className="empty">
+                  <b>No candidates yet</b>
+                  <span>Add a candidate and their resume to begin screening.</span>
+                </div>
+              ) : recentCandidates.map(candidate => (
+                <Link className="home-candidate" to={`/candidates?candidateId=${encodeURIComponent(candidate.id)}`} key={candidate.id}>
+                  <span className="home-candidate__avatar" aria-hidden="true">
+                    {candidate.name.split(/\s+/).map(part => part[0]).slice(0, 2).join('').toUpperCase()}
+                  </span>
+                  <span className="home-candidate__details">
+                    <b>{candidate.name}</b>
+                    <small>{candidate.jobTitle}</small>
+                  </span>
+                  <span className="pill pill--live"><span className="dot" />{candidate.workflowStatus}</span>
+                </Link>
+              ))}
             </div>
           </div>
         </section>
       </main>
 
       <footer className="footer">Who’s Next assists interviewers. Hiring decisions stay with you.</footer>
-
-      {showUploadType && (
-        <div
-          className="modal"
-          onMouseDown={event => event.target === event.currentTarget && setShowUploadType(false)}
-        >
-          <section className="modal__card upload-type-modal glass glass--strong" role="dialog" aria-modal="true" aria-labelledby="upload-type-title">
-            <div className="modal__head">
-              <div>
-                <h3 id="upload-type-title">What are you uploading?</h3>
-                <p>We’ll take you to the right workspace.</p>
-              </div>
-              <button className="icon-btn" type="button" onClick={() => setShowUploadType(false)} aria-label="Close">×</button>
-            </div>
-
-            {pendingUploadFile && (
-              <div className="upload-type-file">
-                <span className="file-picker__icon">↑</span>
-                <span><b>{pendingUploadFile.name}</b><small>{(pendingUploadFile.size / 1024 / 1024).toFixed(2)} MB</small></span>
-              </div>
-            )}
-
-            <div className="upload-type-options">
-              <button className="upload-type-option" type="button" onClick={() => chooseUploadType('job')}>
-                <span>JD</span>
-                <div><b>Job description</b><small>Create a new job and add its requirements.</small></div>
-              </button>
-              <button className="upload-type-option" type="button" onClick={() => chooseUploadType('resume')}>
-                <span>CV</span>
-                <div><b>Candidate resume</b><small>Add a candidate and their resume.</small></div>
-              </button>
-            </div>
-          </section>
-        </div>
-      )}
     </div>
   )
 }

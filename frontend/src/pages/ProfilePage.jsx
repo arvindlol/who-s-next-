@@ -5,7 +5,8 @@ import {
   EmailAuthProvider,
   updatePassword,
 } from 'firebase/auth'
-import { auth } from '../firebase.js'
+import { httpsCallable } from 'firebase/functions'
+import { auth, functions } from '../firebase.js'
 import { useAuth } from '../auth.jsx'
 import Brand from '../components/Brand.jsx'
 
@@ -56,6 +57,36 @@ function getInitials(name) {
   return (words[0][0] + words[1][0]).toUpperCase()
 }
 
+function getApiErrorFeedback(err) {
+  const code = err?.code || ''
+
+  if (code === 'functions/permission-denied' || code === 'functions/invalid-argument') {
+    return {
+      status: 'invalid',
+      message: err.message || 'This Gemini API key is invalid or unavailable.',
+    }
+  }
+
+  if (code === 'functions/resource-exhausted') {
+    return {
+      status: 'quota',
+      message: err.message || 'This key cannot be used right now. Check its Gemini quota or billing.',
+    }
+  }
+
+  if (code === 'functions/unauthenticated') {
+    return {
+      status: 'invalid',
+      message: 'Please sign in again before managing your API key.',
+    }
+  }
+
+  return {
+    status: 'network',
+    message: err?.message || 'The secure API-key service could not be reached. Please try again.',
+  }
+}
+
 export default function ProfilePage() {
   const { user, signOut } = useAuth()
 
@@ -72,6 +103,14 @@ export default function ProfilePage() {
   const [busy, setBusy] = useState(false)
   const [showModal, setShowModal] = useState(false)
 
+  const [apiKey, setApiKey] = useState('')
+  const [showApiKey, setShowApiKey] = useState(false)
+  const [apiStatus, setApiStatus] = useState('idle')
+  const [apiMessage, setApiMessage] = useState('')
+  const [savedKeyEnding, setSavedKeyEnding] = useState('')
+  const [apiLoading, setApiLoading] = useState(true)
+  const [isReplacingApiKey, setIsReplacingApiKey] = useState(false)
+
   useEffect(() => {
     setError('')
     setSuccess('')
@@ -82,6 +121,38 @@ export default function ProfilePage() {
     setShowNew(false)
     setShowConfirm(false)
   }, [showModal])
+
+  useEffect(() => {
+    let cancelled = false
+
+    const loadApiKeyStatus = async () => {
+      if (!user?.uid) {
+        setApiLoading(false)
+        return
+      }
+
+      setApiLoading(true)
+      try {
+        const manageGeminiKey = httpsCallable(functions, 'validateGeminiKey')
+        const result = await manageGeminiKey({ action: 'status' })
+        if (cancelled) return
+
+        setSavedKeyEnding(result.data?.connected ? result.data.keyEnding || '' : '')
+      } catch (err) {
+        if (cancelled) return
+        const feedback = getApiErrorFeedback(err)
+        setApiStatus(feedback.status)
+        setApiMessage(feedback.message)
+      } finally {
+        if (!cancelled) setApiLoading(false)
+      }
+    }
+
+    loadApiKeyStatus()
+    return () => {
+      cancelled = true
+    }
+  }, [user?.uid])
 
   if (!user) return null
 
@@ -97,6 +168,105 @@ export default function ProfilePage() {
     setShowModal(false)
     setError('')
     setSuccess('')
+  }
+
+  const handleApiKeyChange = e => {
+    setApiKey(e.target.value)
+    if (apiStatus !== 'validating') {
+      setApiStatus('idle')
+      setApiMessage('')
+    }
+  }
+
+  const handleValidateApiKey = async () => {
+    const key = apiKey.trim()
+
+    if (!key) {
+      setApiStatus('invalid')
+      setApiMessage('Enter your Gemini API key before validating it.')
+      return
+    }
+
+    setApiStatus('validating')
+    setApiMessage('Securely checking this key with Gemini…')
+
+    try {
+      const validateGeminiKey = httpsCallable(functions, 'validateGeminiKey')
+      const result = await validateGeminiKey({ action: 'validate', apiKey: key })
+
+      if (!result.data?.valid) {
+        throw new Error('Gemini did not confirm this key.')
+      }
+
+      setApiStatus('valid')
+      setApiMessage('Gemini confirmed that this API key is valid.')
+    } catch (err) {
+      const feedback = getApiErrorFeedback(err)
+      setApiStatus(feedback.status)
+      setApiMessage(feedback.message)
+    }
+  }
+
+  const handleSaveApiKey = async () => {
+    if (apiStatus !== 'valid') return
+
+    setApiStatus('saving')
+    setApiMessage('Encrypting and securely saving your key…')
+
+    try {
+      const manageGeminiKey = httpsCallable(functions, 'validateGeminiKey')
+      const result = await manageGeminiKey({ action: 'save', apiKey: apiKey.trim() })
+
+      setSavedKeyEnding(result.data?.keyEnding || apiKey.trim().slice(-4))
+      setApiKey('')
+      setShowApiKey(false)
+      setIsReplacingApiKey(false)
+      setApiStatus('saved')
+      setApiMessage('Your Gemini API key was encrypted and saved securely.')
+    } catch (err) {
+      const feedback = getApiErrorFeedback(err)
+      setApiStatus(feedback.status)
+      setApiMessage(feedback.message)
+    }
+  }
+
+  const handleReplaceApiKey = () => {
+    setIsReplacingApiKey(true)
+    setApiStatus('idle')
+    setApiMessage('')
+  }
+
+  const handleCancelReplaceApiKey = () => {
+    setApiKey('')
+    setShowApiKey(false)
+    setIsReplacingApiKey(false)
+    setApiStatus('idle')
+    setApiMessage('')
+  }
+
+  const handleRemoveApiKey = async () => {
+    const confirmed = window.confirm(
+      'Remove your saved Gemini API key? AI screening will be unavailable until you add another key.',
+    )
+    if (!confirmed) return
+
+    setApiStatus('removing')
+    setApiMessage('Removing your saved key…')
+
+    try {
+      const manageGeminiKey = httpsCallable(functions, 'validateGeminiKey')
+      await manageGeminiKey({ action: 'remove' })
+      setApiKey('')
+      setSavedKeyEnding('')
+      setShowApiKey(false)
+      setIsReplacingApiKey(false)
+      setApiStatus('idle')
+      setApiMessage('')
+    } catch (err) {
+      const feedback = getApiErrorFeedback(err)
+      setApiStatus(feedback.status)
+      setApiMessage(feedback.message)
+    }
   }
 
   const handleSubmit = async e => {
@@ -221,6 +391,142 @@ export default function ProfilePage() {
           )}
         </div>
       </div>
+
+      {/* Gemini API setup */}
+      <section className="profile__api-card profile__section glass glass--strong">
+        <h3>AI Provider Settings</h3>
+        <div className="profile__api-guide">
+          <div className="profile__api-guide-heading">
+            <span className="profile__api-badge" aria-hidden="true">✦</span>
+            <div>
+              <h4>Connect Gemini API</h4>
+              <p>Connect your own Gemini API key to use AI-powered resume screening.</p>
+            </div>
+          </div>
+
+          <ol className="profile__api-steps">
+            <li>
+              Open{' '}
+              <a
+                href="https://aistudio.google.com/app/apikey"
+                target="_blank"
+                rel="noreferrer"
+              >
+                Google AI Studio
+              </a>{' '}
+              and sign in.
+            </li>
+            <li>Select <strong>Create API key</strong>.</li>
+            <li>Choose or create a Google Cloud project.</li>
+            <li>Copy the generated API key.</li>
+            <li>Return here and paste the key in the field provided.</li>
+          </ol>
+
+          <p className="profile__api-note">
+            Keep your key private. Gemini usage is subject to Google's quotas and billing,
+            and the complete key will not be displayed after it is saved.
+          </p>
+        </div>
+
+        <div className="profile__api-form">
+          <div className="profile__api-form-head">
+            <div>
+              <span>Provider</span>
+              <strong>Google Gemini</strong>
+            </div>
+            <span className={`profile__api-connection ${savedKeyEnding ? 'profile__api-connection--ready' : ''}`}>
+              <i aria-hidden="true" />
+              {apiLoading ? 'Checking…' : savedKeyEnding ? 'Key added' : 'Not connected'}
+            </span>
+          </div>
+
+          {savedKeyEnding && !isReplacingApiKey ? (
+            <div className="profile__api-saved">
+              <div>
+                <span>Saved API key</span>
+                <strong>••••••••••••{savedKeyEnding}</strong>
+              </div>
+              <div className="profile__api-saved-actions">
+                <button type="button" className="btn" onClick={handleReplaceApiKey}>
+                  Replace Key
+                </button>
+                <button type="button" className="btn profile__api-remove" onClick={handleRemoveApiKey}>
+                  Remove Key
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="profile__api-entry">
+              <div className="field">
+                <label htmlFor="gemini-api-key">Gemini API key</label>
+                <div className="field__input-wrap">
+                  <input
+                    id="gemini-api-key"
+                    type={showApiKey ? 'text' : 'password'}
+                    value={apiKey}
+                    onChange={handleApiKeyChange}
+                    placeholder="Paste your Gemini API key"
+                    autoComplete="off"
+                    spellCheck="false"
+                    disabled={apiStatus === 'validating' || apiStatus === 'saving' || apiLoading}
+                    aria-describedby="gemini-api-status"
+                  />
+                  <PasswordEye
+                    visible={showApiKey}
+                    onClick={() => setShowApiKey(value => !value)}
+                    label={showApiKey ? 'Hide API key' : 'Show API key'}
+                  />
+                </div>
+              </div>
+
+              <div className="profile__api-actions">
+                {isReplacingApiKey && (
+                  <button type="button" className="btn" onClick={handleCancelReplaceApiKey}>
+                    Cancel
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={handleValidateApiKey}
+                  disabled={apiStatus === 'validating' || apiStatus === 'saving' || apiLoading}
+                >
+                  {apiStatus === 'validating' ? 'Validating…' : 'Validate Key'}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn--primary"
+                  onClick={handleSaveApiKey}
+                  disabled={apiStatus !== 'valid' || apiLoading}
+                >
+                  {apiStatus === 'saving' ? 'Saving…' : 'Save Key'}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {apiMessage && (
+            <div
+              id="gemini-api-status"
+              className={`profile__api-status profile__api-status--${apiStatus}`}
+              role="status"
+            >
+              <span aria-hidden="true">
+                {apiStatus === 'validating' || apiStatus === 'saving' || apiStatus === 'removing'
+                  ? '◌'
+                  : apiStatus === 'invalid' || apiStatus === 'quota' || apiStatus === 'network'
+                    ? '!'
+                    : '✓'}
+              </span>
+              {apiMessage}
+            </div>
+          )}
+
+          <p className="profile__api-preview-note">
+            Your complete key is encrypted by the backend and is never displayed again after saving.
+          </p>
+        </div>
+      </section>
 
       {/* Change Password Modal */}
       {showModal && (

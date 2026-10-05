@@ -219,3 +219,6 @@ __marimo__/
 
 # Firebase CLI local cache
 .firebase/
+
+# Node.js dependencies are restored from package-lock.json
+node_modules/

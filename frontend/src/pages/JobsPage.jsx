@@ -26,8 +26,9 @@ function formatDate(timestamp) {
 function friendlyFirebaseError(error, fallback) {
   switch (error?.code) {
     case 'storage/unauthorized':
+      return 'Firebase Storage denied the file upload. Check the deployed Storage rules.'
     case 'permission-denied':
-      return 'Firebase denied this request. Check that the Firestore and Storage rules are deployed.'
+      return 'Firestore denied saving the job details. Check the deployed Firestore rules.'
     case 'storage/canceled':
       return 'The upload was cancelled.'
     case 'storage/retry-limit-exceeded':
@@ -41,6 +42,7 @@ function friendlyFirebaseError(error, fallback) {
 function UploadJobModal({ userId, initialFile, onClose }) {
   const [title, setTitle] = useState('')
   const [file, setFile] = useState(initialFile || null)
+  const [additionalCriteria, setAdditionalCriteria] = useState([{ id: 'criterion-1', text: '' }])
   const [error, setError] = useState('')
   const [progress, setProgress] = useState(0)
   const [busy, setBusy] = useState(false)
@@ -64,7 +66,10 @@ function UploadJobModal({ userId, initialFile, onClose }) {
 
     setBusy(true)
     try {
-      await createJob({ userId, title, file, onProgress: setProgress })
+      const criteria = additionalCriteria
+        .map(criterion => ({ ...criterion, text: criterion.text.trim() }))
+        .filter(criterion => criterion.text)
+      await createJob({ userId, title, file, additionalCriteria: criteria, onProgress: setProgress })
       onClose()
     } catch (uploadError) {
       setError(friendlyFirebaseError(uploadError, 'Could not upload the job description. Please try again.'))
@@ -124,6 +129,55 @@ function UploadJobModal({ userId, initialFile, onClose }) {
             />
           </div>
 
+          <div className="field job-criteria-field">
+            <div className="job-criteria-field__head">
+              <div>
+                <label>Additional hiring criteria <span>(optional)</span></label>
+                <small>Add verbal requirements, benchmarks, or interview focus areas.</small>
+              </div>
+              <button
+                className="job-criteria-field__add"
+                type="button"
+                onClick={() => setAdditionalCriteria(current => [
+                  ...current,
+                  { id: `criterion-${Date.now()}-${current.length}`, text: '' },
+                ])}
+                disabled={busy}
+              >
+                ＋ Add point
+              </button>
+            </div>
+
+            <div className="job-criteria-field__list">
+              {additionalCriteria.map((criterion, index) => (
+                <div className="job-criteria-field__row" key={criterion.id}>
+                  <span aria-hidden="true">{index + 1}.</span>
+                  <textarea
+                    value={criterion.text}
+                    onChange={event => setAdditionalCriteria(current => current.map(item => (
+                      item.id === criterion.id ? { ...item, text: event.target.value } : item
+                    )))}
+                    placeholder="Enter a qualification, benchmark, or interview instruction"
+                    aria-label={`Additional hiring criterion ${index + 1}`}
+                    rows="2"
+                    disabled={busy}
+                  />
+                  {additionalCriteria.length > 1 && (
+                    <button
+                      type="button"
+                      onClick={() => setAdditionalCriteria(current => current.filter(item => item.id !== criterion.id))}
+                      aria-label={`Remove criterion ${index + 1}`}
+                      title="Remove point"
+                      disabled={busy}
+                    >
+                      ×
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+
           {busy && (
             <div className="upload-progress" aria-label={`Upload ${progress}% complete`}>
               <span style={{ width: `${progress}%` }} />
@@ -148,6 +202,11 @@ function ViewJobModal({ job, onClose }) {
   const [url, setUrl] = useState('')
   const [error, setError] = useState('')
   const isPdf = job.fileType === 'application/pdf' || job.originalFilename?.toLowerCase().endsWith('.pdf')
+  const additionalCriteria = Array.isArray(job.additionalCriteria)
+    ? job.additionalCriteria.filter(criterion => (
+      typeof criterion === 'string' ? criterion.trim() : criterion?.text?.trim()
+    ))
+    : []
 
   useEffect(() => {
     let active = true
@@ -173,6 +232,15 @@ function ViewJobModal({ job, onClose }) {
           </div>
           <button className="icon-btn" type="button" onClick={onClose} aria-label="Close">×</button>
         </div>
+
+        <section className="job-viewer__criteria" hidden={additionalCriteria.length === 0}>
+          <b>Additional hiring criteria</b>
+          <ol>
+            {additionalCriteria.map((criterion, index) => (
+              <li key={criterion.id || `${index}-${criterion}`}>{typeof criterion === 'string' ? criterion : criterion.text}</li>
+            ))}
+          </ol>
+        </section>
 
         <div className="job-viewer__body">
           {!url && !error && <div className="job-viewer__loading">Opening document…</div>}
@@ -201,14 +269,14 @@ function ManageJobModal({ job, stage, userId, onClose }) {
   const [error, setError] = useState('')
   const [confirmDelete, setConfirmDelete] = useState(false)
   const completed = stage === 'completed'
-  const canDelete = stage === 'new'
+  const canDelete = stage === 'new' || completed
 
   const submit = async event => {
     event.preventDefault()
     setBusy(true)
     setError('')
     try {
-      if (confirmDelete) await deleteJob(job)
+      if (confirmDelete) await deleteJob(job.id, userId)
       else if (completed) await reopenJob(job.id)
       else await closeJob(job.id, userId)
       onClose()
@@ -234,26 +302,22 @@ function ManageJobModal({ job, stage, userId, onClose }) {
 
         <form className="manage-job__form" onSubmit={submit}>
           {confirmDelete ? (
-            <p>This permanently deletes the job description from Firestore and Firebase Storage. This action cannot be undone.</p>
+            <p>This removes the job description from the application. It will no longer be shown to users.</p>
           ) : completed ? (
             <p>Reopening this job will allow candidates to be selected again. Its stage will return to New or In progress based on existing activity.</p>
           ) : (
             <p>Closing this job marks its hiring process as completed. Existing candidates, reports, and interviews remain available.</p>
           )}
 
-          {canDelete && !confirmDelete && (
-            <div className="manage-job__danger-zone">
-              <span>Permanently remove this unused job description.</span>
+          <span className="hint manage-job__error" role="alert">{error}</span>
+          <div className="modal__actions">
+            {canDelete && !confirmDelete && (
               <button className="manage-job__delete" type="button" onClick={() => { setConfirmDelete(true); setError('') }} disabled={busy}>
                 Delete job
               </button>
-            </div>
-          )}
-
-          <span className="hint manage-job__error" role="alert">{error}</span>
-          <div className="modal__actions">
+            )}
             {confirmDelete && (
-              <button className="btn new-screening__back" type="button" onClick={() => { setConfirmDelete(false); setError('') }} disabled={busy}>← Back</button>
+              <button className="btn new-screening__back" type="button" onClick={() => { setConfirmDelete(false); setError('') }} disabled={busy}>Back</button>
             )}
             <button className={`btn ${confirmDelete || !completed ? 'btn--danger' : 'btn--primary'}`} type="submit" disabled={busy}>
               {busy ? 'Saving…' : confirmDelete ? 'Delete permanently' : completed ? 'Reopen job' : 'Close job'}
