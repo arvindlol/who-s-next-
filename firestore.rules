@@ -1,0 +1,53 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function ownsUserDocument(userId) {
+      return signedIn() && request.auth.uid == userId;
+    }
+
+    function validUserIdentity(userId) {
+      return request.resource.data.uid == userId
+        && request.resource.data.email == request.auth.token.email;
+    }
+
+    match /users/{userId} {
+      allow create: if ownsUserDocument(userId) && validUserIdentity(userId);
+      allow read, delete: if ownsUserDocument(userId);
+      allow update: if ownsUserDocument(userId) && validUserIdentity(userId);
+    }
+
+    match /jobs/{jobId} {
+      allow create: if signedIn()
+        && request.resource.data.ownerId == request.auth.uid;
+      allow read, delete: if signedIn()
+        && resource.data.ownerId == request.auth.uid;
+      allow update: if signedIn()
+        && resource.data.ownerId == request.auth.uid
+        && request.resource.data.ownerId == request.auth.uid;
+    }
+
+    match /interviews/{interviewId} {
+      allow read: if signedIn()
+        && resource.data.ownerId == request.auth.uid;
+    }
+
+    match /screeningReports/{reportId} {
+      allow read: if signedIn()
+        && resource.data.ownerId == request.auth.uid;
+    }
+
+    match /matches/{matchId} {
+      allow read: if signedIn()
+        && resource.data.ownerId == request.auth.uid;
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
