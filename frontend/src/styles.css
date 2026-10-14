@@ -259,3 +259,4 @@ button { cursor: pointer; }
   .hero__stats { grid-template-columns: 1fr 1fr 1fr; }
   .job { grid-template-columns: 1fr; gap: 6px; }
 }
+

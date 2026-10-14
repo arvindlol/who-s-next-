@@ -3,6 +3,7 @@ import { AuthProvider, useAuth } from './auth.jsx'
 import Backdrop from './components/Backdrop.jsx'
 import Auth from './pages/Auth.jsx'
 import Home from './pages/Home.jsx'
+import Candidates from './pages/Candidates.jsx'
 
 function AuthLoading() {
   return (
@@ -62,6 +63,16 @@ export default function App() {
               <Home />
             </ProtectedRoute>
           }
+        />
+          <Route
+  path="/candidates"
+  element={
+    <ProtectedRoute>
+      <Candidates />
+    </ProtectedRoute>
+  }
+
+
         />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
