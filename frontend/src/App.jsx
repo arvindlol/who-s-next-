@@ -4,6 +4,10 @@ import Backdrop from './components/Backdrop.jsx'
 import Auth from './pages/Auth.jsx'
 import Home from './pages/Home.jsx'
 import Candidates from './pages/Candidates.jsx'
+import JobsPage from './pages/JobsPage.jsx'
+import ProfilePage from './pages/ProfilePage.jsx'
+import ScreeningPage from './pages/ScreeningPage.jsx'
+import ScreeningReportPage from './pages/ScreeningReportPage.jsx'
 
 function AuthLoading() {
   return (
@@ -25,13 +29,17 @@ function AuthLoading() {
 
 function ProtectedRoute({ children }) {
   const { user, loading } = useAuth()
+
   if (loading) return <AuthLoading />
+
   return user ? children : <Navigate to="/login" replace />
 }
 
 function PublicRoute({ children }) {
   const { user, loading } = useAuth()
+
   if (loading) return <AuthLoading />
+
   return user ? <Navigate to="/" replace /> : children
 }
 
@@ -39,6 +47,7 @@ export default function App() {
   return (
     <AuthProvider>
       <Backdrop />
+
       <Routes>
         <Route
           path="/login"
@@ -48,6 +57,7 @@ export default function App() {
             </PublicRoute>
           }
         />
+
         <Route
           path="/signup"
           element={
@@ -56,6 +66,7 @@ export default function App() {
             </PublicRoute>
           }
         />
+
         <Route
           path="/"
           element={
@@ -64,17 +75,56 @@ export default function App() {
             </ProtectedRoute>
           }
         />
-          <Route
-  path="/candidates"
-  element={
-    <ProtectedRoute>
-      <Candidates />
-    </ProtectedRoute>
-  }
 
-
+        <Route
+          path="/candidates"
+          element={
+            <ProtectedRoute>
+              <Candidates />
+            </ProtectedRoute>
+          }
         />
-        <Route path="*" element={<Navigate to="/" replace />} />
+
+        <Route
+          path="/jobs"
+          element={
+            <ProtectedRoute>
+              <JobsPage />
+            </ProtectedRoute>
+          }
+        />
+
+        <Route
+          path="/screening"
+          element={
+            <ProtectedRoute>
+              <ScreeningPage />
+            </ProtectedRoute>
+          }
+        />
+
+        <Route
+          path="/screening/:screeningId/report/:candidateId"
+          element={
+            <ProtectedRoute>
+              <ScreeningReportPage />
+            </ProtectedRoute>
+          }
+        />
+
+        <Route
+          path="/profile"
+          element={
+            <ProtectedRoute>
+              <ProfilePage />
+            </ProtectedRoute>
+          }
+        />
+
+        <Route
+          path="*"
+          element={<Navigate to="/" replace />}
+        />
       </Routes>
     </AuthProvider>
   )

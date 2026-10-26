@@ -1,6 +1,10 @@
-import { NavLink } from 'react-router-dom'
+import { useEffect, useMemo, useState } from 'react'
+import { Link, NavLink, useNavigate } from 'react-router-dom'
 import Brand from '../components/Brand.jsx'
 import { useAuth } from '../auth.jsx'
+import { subscribeToDashboardStats } from '../services/dashboard.js'
+import { subscribeToHomeJobs } from '../services/homeJobs.js'
+import { getScreenings } from '../data/screeningDemo.js'
 
 const PIPELINE = [
   { n: 1, title: 'Job description', desc: 'Extract the skills and responsibilities that matter.', ai: true },
@@ -11,15 +15,78 @@ const PIPELINE = [
   { n: 6, title: 'Final report', desc: 'Structured evaluation to support your decision.', ai: true },
 ]
 
-const JOBS = [
-  { title: 'Senior Backend Engineer', team: 'Platform · Python, FastAPI, Postgres', candidates: 4, status: 'live' },
-  { title: 'Frontend Developer', team: 'Product · React, TypeScript', candidates: 2, status: 'warn' },
-  { title: 'Data Engineer', team: 'Analytics · Spark, Airflow', candidates: 0, status: 'ok' },
-]
+function formatJobDate(timestamp) {
+  if (!timestamp?.toDate) return 'Uploaded just now'
+  const date = new Intl.DateTimeFormat(undefined, {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+  }).format(timestamp.toDate())
+  return `Uploaded ${date}`
+}
 
 export default function Home() {
   const { user, signOut } = useAuth()
+  const navigate = useNavigate()
   const initials = (user?.name || 'U').slice(0, 2).toUpperCase()
+  const [stats, setStats] = useState({
+    jobDescriptions: 0,
+    pendingInterviews: 0,
+    screeningReports: 0,
+  })
+  const [statsLoading, setStatsLoading] = useState(true)
+  const [statsError, setStatsError] = useState(false)
+  const [homeJobs, setHomeJobs] = useState([])
+  const [homeJobsLoading, setHomeJobsLoading] = useState(true)
+  const [homeJobsError, setHomeJobsError] = useState(false)
+  const recentCandidates = useMemo(() => {
+    const seenCandidateIds = new Set()
+    const candidates = []
+
+    getScreenings().forEach(screening => {
+      screening.results.forEach(candidate => {
+        if (seenCandidateIds.has(candidate.id)) return
+        seenCandidateIds.add(candidate.id)
+        candidates.push({
+          ...candidate,
+          jobTitle: screening.jobTitle,
+          workflowStatus: screening.status === 'completed' ? 'Screening ready' : 'Resume uploaded',
+        })
+      })
+    })
+
+    return candidates.slice(0, 3)
+  }, [])
+
+  useEffect(() => {
+    if (!user?.uid) return undefined
+    setStatsLoading(true)
+    setStatsError(false)
+    return subscribeToDashboardStats(
+      user.uid,
+      setStats,
+      () => setStatsLoading(false),
+      error => {
+        console.error('Could not load dashboard statistics:', error)
+        setStatsError(true)
+      },
+    )
+  }, [user?.uid])
+
+  useEffect(() => {
+    if (!user?.uid) return undefined
+    setHomeJobsLoading(true)
+    setHomeJobsError(false)
+    return subscribeToHomeJobs(
+      user.uid,
+      setHomeJobs,
+      () => setHomeJobsLoading(false),
+      error => {
+        console.error('Could not load recent jobs:', error)
+        setHomeJobsError(true)
+      },
+    )
+  }, [user?.uid])
 
   return (
     <div className="shell">
@@ -29,11 +96,13 @@ export default function Home() {
           <NavLink to="/" end>Overview</NavLink>
           <NavLink to="/jobs">Jobs</NavLink>
           <NavLink to="/candidates">Candidates</NavLink>
+          <NavLink to="/screening">Screening</NavLink>
+          <NavLink to="/interviews">Interviews</NavLink>
           <NavLink to="/reports">Reports</NavLink>
         </nav>
         <span className="spacer" />
+        <NavLink to="/profile" className="avatar" title={user?.email}>{initials}</NavLink>
         <button className="btn btn--ghost" onClick={signOut}>Log out</button>
-        <span className="avatar" title={user?.email}>{initials}</span>
       </header>
 
       <main className="page">
@@ -43,14 +112,18 @@ export default function Home() {
             <h1 style={{ marginTop: 14 }}>Good to see you, {user?.name}.</h1>
             <p>Start with a job description. Who’s Next will structure it, then you can add resumes one at a time and get a fit report for each.</p>
             <div className="hero__actions">
-              <button className="btn btn--primary">Add job description</button>
-              <button className="btn">Upload a resume</button>
+              <button className="btn btn--primary" onClick={() => navigate('/jobs?new=true')}>Add job description</button>
+              <button className="btn" onClick={() => navigate('/candidates?new=true')}>Add Candidate</button>
             </div>
           </div>
-          <aside className="hero__stats glass glass--lg" aria-label="Summary">
-            <div className="stat"><b>3</b><span>Open roles</span></div>
-            <div className="stat"><b>6</b><span>Candidates screened</span></div>
-            <div className="stat"><b>2</b><span>Plans ready</span></div>
+          <aside
+            className="hero__stats glass glass--lg"
+            aria-label="Workspace summary"
+            title={statsError ? 'Some workspace statistics could not be loaded.' : undefined}
+          >
+            <div className="stat"><b>{statsLoading ? '—' : stats.jobDescriptions}</b><span>Job descriptions</span></div>
+            <div className="stat"><b>{statsLoading ? '—' : stats.pendingInterviews}</b><span>Interviews pending</span></div>
+            <div className="stat"><b>{statsLoading ? '—' : stats.screeningReports}</b><span>Screening reports</span></div>
           </aside>
         </section>
 
@@ -69,29 +142,49 @@ export default function Home() {
 
         <section className="section grid-2">
           <div>
-            <div className="section__head"><h2>Your jobs</h2><a href="#">See all</a></div>
+            <div className="section__head"><h2>Your jobs</h2><Link to="/jobs">See all</Link></div>
             <div className="jobs glass glass--lg">
-              {JOBS.map(j => (
-                <div key={j.title} className="job">
-                  <div><h3>{j.title}</h3><p>{j.team}</p></div>
-                  <span className="count">{j.candidates} candidate{j.candidates === 1 ? '' : 's'}</span>
-                  <span className={`pill pill--${j.status}`}>
+              {homeJobsLoading ? (
+                <div className="empty"><b>Loading your jobs…</b></div>
+              ) : homeJobsError ? (
+                <div className="empty"><b>Could not load your jobs</b><span>Please refresh and try again.</span></div>
+              ) : homeJobs.length === 0 ? (
+                <div className="empty">
+                  <b>No jobs yet</b>
+                  <span>Upload a job description to get started.</span>
+                </div>
+              ) : homeJobs.map(job => (
+                <div key={job.id} className="job">
+                  <div><h3>{job.title}</h3><p>{formatJobDate(job.createdAt)}</p></div>
+                  <span className="count">{job.candidateCount} candidate{job.candidateCount === 1 ? '' : 's'}</span>
+                  <span className={`pill pill--${job.statusTone}`}>
                     <span className="dot" />
-                    {j.status === 'live' ? 'Interviews this week' : j.status === 'warn' ? 'Plans pending' : 'Awaiting resumes'}
+                    {job.workflowStatus}
                   </span>
                 </div>
               ))}
             </div>
           </div>
           <div>
-            <div className="section__head"><h2>Quick upload</h2></div>
-            <div className="upload glass glass--lg">
-              <div className="dropzone" role="button" tabIndex={0}>
-                <b>Drop a resume or transcript here</b>
-                PDF, DOCX or TXT
-              </div>
-              <small>Files are stored privately in your workspace and never shared with other users.</small>
-              <button className="btn btn--block">Choose a file</button>
+            <div className="section__head"><h2>Your Candidates</h2><Link to="/candidates">View all</Link></div>
+            <div className="home-candidates glass glass--lg">
+              {recentCandidates.length === 0 ? (
+                <div className="empty">
+                  <b>No candidates yet</b>
+                  <span>Add a candidate and their resume to begin screening.</span>
+                </div>
+              ) : recentCandidates.map(candidate => (
+                <Link className="home-candidate" to={`/candidates?candidateId=${encodeURIComponent(candidate.id)}`} key={candidate.id}>
+                  <span className="home-candidate__avatar" aria-hidden="true">
+                    {candidate.name.split(/\s+/).map(part => part[0]).slice(0, 2).join('').toUpperCase()}
+                  </span>
+                  <span className="home-candidate__details">
+                    <b>{candidate.name}</b>
+                    <small>{candidate.jobTitle}</small>
+                  </span>
+                  <span className="pill pill--live"><span className="dot" />{candidate.workflowStatus}</span>
+                </Link>
+              ))}
             </div>
           </div>
         </section>

@@ -17,6 +17,46 @@ const STAGES = [
   'Get Brief Report',
 ]
 
+function PasswordEye({ visible, onClick, label }) {
+  return (
+    <button
+      type="button"
+      className="password-toggle"
+      onClick={onClick}
+      aria-label={label}
+      tabIndex={0}
+    >
+      {visible ? (
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" aria-hidden="true">
+          <path
+            d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            strokeLinejoin="round"
+          />
+          <circle cx="12" cy="12" r="2.5" stroke="currentColor" strokeWidth="1.8" />
+        </svg>
+      ) : (
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" aria-hidden="true">
+          <path
+            d="M2 12s4-7 10-7c2 0 3.5.8 5 1.8M22 12s-4 7-10 7c-2 0-3.5-.8-5-1.8"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+          <path
+            d="M4 4l16 16"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            strokeLinecap="round"
+          />
+        </svg>
+      )}
+    </button>
+  )
+}
+
 export default function Auth({ mode }) {
   const isLogin = mode === 'login'
   const navigate = useNavigate()
@@ -24,6 +64,8 @@ export default function Auth({ mode }) {
   const [form, setForm] = useState({ name: '', email: '', password: '', confirm: '' })
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+  const [showPassword, setShowPassword] = useState(false)
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false)
 
   // Clear error when toggling between login and signup
   useEffect(() => {
@@ -141,17 +183,38 @@ export default function Auth({ mode }) {
           {isLogin ? (
             <div className="field">
               <label htmlFor="password">Password</label>
-              <input id="password" type="password" value={form.password} onChange={set('password')} placeholder="••••••••" autoComplete="current-password" />
+              <div className="field__input-wrap">
+                <input id="password" type={showPassword ? 'text' : 'password'} value={form.password} onChange={set('password')} placeholder="••••••••" autoComplete="current-password" />
+                <PasswordEye
+                  visible={showPassword}
+                  onClick={() => setShowPassword(v => !v)}
+                  label={showPassword ? 'Hide password' : 'Show password'}
+                />
+              </div>
             </div>
           ) : (
             <>
               <div className="field">
                 <label htmlFor="password">Password</label>
-                <input id="password" type="password" value={form.password} onChange={set('password')} placeholder="8+ characters" autoComplete="new-password" />
+                <div className="field__input-wrap">
+                  <input id="password" type={showPassword ? 'text' : 'password'} value={form.password} onChange={set('password')} placeholder="8+ characters" autoComplete="new-password" />
+                  <PasswordEye
+                    visible={showPassword}
+                    onClick={() => setShowPassword(v => !v)}
+                    label={showPassword ? 'Hide password' : 'Show password'}
+                  />
+                </div>
               </div>
               <div className="field">
                 <label htmlFor="confirm">Confirm Password</label>
-                <input id="confirm" type="password" value={form.confirm} onChange={set('confirm')} placeholder="Repeat it" autoComplete="new-password" />
+                <div className="field__input-wrap">
+                  <input id="confirm" type={showConfirmPassword ? 'text' : 'password'} value={form.confirm} onChange={set('confirm')} placeholder="Repeat it" autoComplete="new-password" />
+                  <PasswordEye
+                    visible={showConfirmPassword}
+                    onClick={() => setShowConfirmPassword(v => !v)}
+                    label={showConfirmPassword ? 'Hide confirm password' : 'Show confirm password'}
+                  />
+                </div>
               </div>
             </>
           )}
