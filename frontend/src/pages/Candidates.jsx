@@ -20,12 +20,7 @@ import {
   Timestamp,
 } from 'firebase/firestore'
 
-import {
-  ref,
-  uploadBytes,
-  getDownloadURL,
-  deleteObject,
-} from 'firebase/storage'
+import { ref, uploadBytes, getDownloadURL, deleteObject } from 'firebase/storage'
 
 import { db, storage } from '../firebase'
 
@@ -45,14 +40,6 @@ const STATUSES = [
   'Rejected',
 ]
 
-const MATCHED_STATUSES = [
-  'JD Matched',
-  'Shortlisted',
-  'Interview Scheduled',
-  'Interview Ready',
-  'Hired',
-]
-
 // Stages where a candidate is finished, so no follow-up is needed.
 const CLOSED_STATUSES = ['Hired', 'Rejected']
 
@@ -64,13 +51,14 @@ const SORT_OPTIONS = [
   { value: 'rating', label: 'Top rated' },
 ]
 
+const DAY_MS = 24 * 60 * 60 * 1000
 const MAX_RESUME_SIZE = 10 * 1024 * 1024
 const MAX_IMPORT_SIZE = 5 * 1024 * 1024
 const MAX_IMPORT_ROWS = 1000
 const PAGE_SIZE = 50
 const UNDO_WINDOW_MS = 8000
-const FOLLOW_UP_DAYS = 7
-const FOLLOW_UP_MS = FOLLOW_UP_DAYS * 24 * 60 * 60 * 1000
+const FOLLOW_UP_MS = 7 * DAY_MS
+// Each candidate can write 2 docs (candidate + activity), so 200 stays under Firestore's 500 limit.
 const BATCH_SIZE = 200
 
 const DEFAULT_EMAIL_DOMAIN = 'gmail.com'
@@ -128,31 +116,28 @@ function getStatusType(status = '') {
   const s = status.toLowerCase()
 
   if (s === 'interview ready' || s === 'hired') return 'live'
-  if (s === 'jd matched' || s === 'resume reviewed' || s === 'shortlisted')
-    return 'ok'
+  if (s === 'jd matched' || s === 'resume reviewed' || s === 'shortlisted') return 'ok'
   if (s === 'rejected') return 'danger'
 
   return 'warn'
 }
 
 function getErrorMessage(error) {
-  const code = error?.code || ''
-
-  if (code === 'permission-denied' || code === 'firestore/permission-denied') {
-    return 'You don’t have permission to do this. Please sign in again and retry.'
+  switch (error?.code) {
+    case 'permission-denied':
+    case 'firestore/permission-denied':
+      return 'You don’t have permission to do this. Please sign in again and retry.'
+    case 'storage/unauthorized':
+      return 'File storage refused the request. Please sign in again and retry.'
+    case 'storage/canceled':
+      return 'The resume upload was cancelled.'
+    case 'storage/quota-exceeded':
+      return 'Your storage space is full, so the file could not be saved.'
+    case 'unavailable':
+      return 'We couldn’t reach the server. Check your connection and try again.'
+    default:
+      return error?.message || 'Something went wrong. Please try again.'
   }
-  if (code === 'storage/unauthorized') {
-    return 'File storage refused the request. Please sign in again and retry.'
-  }
-  if (code === 'storage/canceled') return 'The resume upload was cancelled.'
-  if (code === 'storage/quota-exceeded') {
-    return 'Your storage space is full, so the file could not be saved.'
-  }
-  if (code === 'unavailable') {
-    return 'We couldn’t reach the server. Check your connection and try again.'
-  }
-
-  return error?.message || 'Something went wrong. Please try again.'
 }
 
 function validateResume(file) {
@@ -191,14 +176,42 @@ function normalizeCandidate(id, data) {
   }
 }
 
+// The one place that decides what a stored candidate looks like.
+function toCandidateDoc(ownerId, values, extra = {}) {
+  return {
+    ownerId,
+    name: values.name,
+    role: values.role,
+    email: values.email,
+    phone: values.phone,
+    status: 'Screening',
+    additionalinformation: values.notes,
+    resumeUrl: '',
+    resumeName: '',
+    resumePath: '',
+    ratingSum: 0,
+    ratingCount: 0,
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+    ...extra,
+  }
+}
+
+// Runs writes in safe-sized Firestore batches.
+async function commitInBatches(items, apply) {
+  for (let i = 0; i < items.length; i += BATCH_SIZE) {
+    const batch = writeBatch(db)
+    items.slice(i, i + BATCH_SIZE).forEach((item) => apply(batch, item))
+    await batch.commit()
+  }
+}
+
+const candidateRef = (id) => doc(db, 'candidates', id)
+const newActivityRef = (id) => doc(collection(db, 'candidates', id, 'activity'))
+
 function isTyping(target) {
   const tag = target?.tagName
-  return (
-    tag === 'INPUT' ||
-    tag === 'TEXTAREA' ||
-    tag === 'SELECT' ||
-    target?.isContentEditable
-  )
+  return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || target?.isContentEditable
 }
 
 function useDebounced(value, delay = 200) {
@@ -276,32 +289,26 @@ function firstName(name = '') {
   return name.trim().split(/\s+/)[0] || 'there'
 }
 
-function formatDate(ms) {
-  return new Date(ms).toLocaleDateString(undefined, {
-    day: 'numeric',
-    month: 'short',
-    year: 'numeric',
-  })
-}
+const formatDate = (ms) =>
+  new Date(ms).toLocaleDateString(undefined, { day: '2-digit', month: 'short', year: 'numeric' })
 
-function formatDateTime(ms) {
-  return new Date(ms).toLocaleString(undefined, {
+const formatDateTime = (ms) =>
+  new Date(ms).toLocaleString(undefined, {
     day: 'numeric',
     month: 'short',
     hour: 'numeric',
     minute: '2-digit',
   })
-}
 
 function stars(value) {
   const full = Math.max(0, Math.min(5, Math.round(value)))
   return '★'.repeat(full) + '☆'.repeat(5 - full)
 }
 
+const plural = (count, word) => `${count} ${word}${count === 1 ? '' : 's'}`
+
 function averageRating(candidate) {
-  return candidate.ratingCount > 0
-    ? candidate.ratingSum / candidate.ratingCount
-    : 0
+  return candidate.ratingCount > 0 ? candidate.ratingSum / candidate.ratingCount : 0
 }
 
 function isStale(candidate) {
@@ -312,13 +319,12 @@ function isStale(candidate) {
 }
 
 function daysSince(ms) {
-  return Math.max(0, Math.floor((Date.now() - ms) / (24 * 60 * 60 * 1000)))
+  return Math.max(0, Math.floor((Date.now() - ms) / DAY_MS))
 }
 
 /* ---------- email + phone helpers ---------- */
 
-// "rahul" -> "rahul@gmail.com", "rahul@" -> "rahul@gmail.com",
-// "Rahul@Outlook.com" -> "rahul@outlook.com"
+// "rahul" -> "rahul@gmail.com", "rahul@" -> "rahul@gmail.com"
 function normalizeEmail(value = '') {
   const text = value.trim().toLowerCase().replace(/\s+/g, '')
   if (!text) return ''
@@ -340,9 +346,7 @@ function getEmailSuggestions(value = '') {
 
   return EMAIL_DOMAINS.filter(
     (domain) => domain.startsWith(typedDomain) && domain !== typedDomain
-  )
-    .slice(0, 4)
-    .map((domain) => ({ local, domain, value: `${local}@${domain}` }))
+  ).map((domain) => ({ local, domain, value: `${local}@${domain}` }))
 }
 
 function normalizePhone(value = '') {
@@ -353,9 +357,7 @@ function normalizePhone(value = '') {
 }
 
 // Last 10 digits, so "+91 98765 43210" and "98765 43210" count as the same.
-function phoneKey(value = '') {
-  return value.replace(/\D/g, '').slice(-10)
-}
+const phoneKey = (value = '') => value.replace(/\D/g, '').slice(-10)
 
 function buildMailto(candidate, template, sender) {
   const subject = encodeURIComponent(template.subject(candidate))
@@ -363,7 +365,9 @@ function buildMailto(candidate, template, sender) {
   return `mailto:${encodeURIComponent(candidate.email)}?subject=${subject}&body=${body}`
 }
 
-/* ---------- small shared pieces ---------- */
+/* =========================================
+   SMALL SHARED PIECES
+========================================= */
 
 function CandidateTags({ candidate }) {
   const average = averageRating(candidate)
@@ -376,9 +380,7 @@ function CandidateTags({ candidate }) {
       {average > 0 && (
         <span
           className="candidate-tag candidate-tag--rating"
-          title={`${candidate.ratingCount} interview rating${
-            candidate.ratingCount === 1 ? '' : 's'
-          }`}
+          title={`${plural(candidate.ratingCount, 'interview rating')}`}
         >
           ★ {average.toFixed(1)}
         </span>
@@ -393,6 +395,92 @@ function CandidateTags({ candidate }) {
         </span>
       )}
     </span>
+  )
+}
+
+// One stage dropdown, used in the table and in the profile.
+function StageSelect({ candidate, busy, onChange }) {
+  return (
+    <select
+      className={`candidate-status-select pill--${getStatusType(candidate.status)}`}
+      value={candidate.status}
+      disabled={busy}
+      onChange={(event) => onChange(candidate, event.target.value)}
+      aria-label={`Update status for ${candidate.name}`}
+    >
+      {STATUSES.map((status) => (
+        <option key={status} value={status}>
+          {status}
+        </option>
+      ))}
+    </select>
+  )
+}
+
+// One modal shell, same markup as the Jobs page modals.
+function Modal({ onClose, labelledBy, role = 'dialog', describedBy, small = false, children }) {
+  return (
+    <div
+      className="modal"
+      onMouseDown={(event) => event.target === event.currentTarget && onClose?.()}
+    >
+      <section
+        className={`modal__card cand-modal glass glass--strong${small ? ' cand-modal--small' : ''}`}
+        role={role}
+        aria-modal="true"
+        aria-labelledby={labelledBy}
+        aria-describedby={describedBy}
+      >
+        {children}
+      </section>
+    </div>
+  )
+}
+
+function ModalHead({ id, title, text, badge, onClose, closeLabel, disabled }) {
+  return (
+    <div className="modal__head">
+      <div>
+        {badge}
+        <h3 id={id}>{title}</h3>
+        {text && <p>{text}</p>}
+      </div>
+      <button
+        type="button"
+        className="icon-btn"
+        onClick={onClose}
+        disabled={disabled}
+        aria-label={closeLabel}
+      >
+        ×
+      </button>
+    </div>
+  )
+}
+
+function StatusBadge({ status }) {
+  return (
+    <span className={`pill pill--${getStatusType(status)}`}>
+      <span className="dot" />
+      {status}
+    </span>
+  )
+}
+
+function Detail({ label, children }) {
+  return (
+    <div className="candidate-detail">
+      <span>{label}</span>
+      {children}
+    </div>
+  )
+}
+
+function DialogIcon({ tone, children }) {
+  return (
+    <div className={`candidate-dialog-icon candidate-dialog-icon--${tone}`} aria-hidden="true">
+      {children}
+    </div>
   )
 }
 
@@ -457,6 +545,9 @@ export default function Candidates() {
 
   const [toasts, setToasts] = useState([])
 
+  const isBoard = view === 'board'
+  const isEditing = Boolean(editingId)
+
   /* ---------- toasts ---------- */
 
   const dismissToast = useCallback((id) => {
@@ -470,13 +561,7 @@ export default function Candidates() {
 
       setToasts((previous) => [
         ...previous.slice(-2),
-        {
-          id,
-          type,
-          message,
-          actionLabel: options.actionLabel,
-          onAction: options.onAction,
-        },
+        { id, type, message, actionLabel: options.actionLabel, onAction: options.onAction },
       ])
 
       setTimeout(() => dismissToast(id), duration)
@@ -493,20 +578,30 @@ export default function Candidates() {
 
   /* ---------- activity history (who did what, and when) ---------- */
 
+  const activityEntry = useCallback(
+    (type, text, extra = {}) => ({
+      type,
+      text,
+      ...extra,
+      by: actorName,
+      byUid: user?.uid,
+      createdAt: serverTimestamp(),
+    }),
+    [user?.uid, actorName]
+  )
+
   const logActivity = useCallback(
-    (candidateId, entry) => {
+    (candidateId, type, text) => {
       if (!user?.uid || !candidateId) return Promise.resolve()
 
-      return addDoc(collection(db, 'candidates', candidateId, 'activity'), {
-        ...entry,
-        by: actorName,
-        byUid: user.uid,
-        createdAt: serverTimestamp(),
-      }).catch((error) => {
+      return addDoc(
+        collection(db, 'candidates', candidateId, 'activity'),
+        activityEntry(type, text)
+      ).catch((error) => {
         console.warn('Activity not saved:', error?.code || error)
       })
     },
-    [user?.uid, actorName]
+    [user?.uid, activityEntry]
   )
 
   /* ---------- never leave a deleted candidate's resume behind ---------- */
@@ -537,13 +632,8 @@ export default function Candidates() {
 
     setLoading(true)
 
-    const candidatesQuery = query(
-      collection(db, 'candidates'),
-      where('ownerId', '==', user.uid)
-    )
-
-    const unsubscribe = onSnapshot(
-      candidatesQuery,
+    return onSnapshot(
+      query(collection(db, 'candidates'), where('ownerId', '==', user.uid)),
       (snapshot) => {
         const loaded = snapshot.docs.map((candidateDoc) =>
           normalizeCandidate(
@@ -562,13 +652,9 @@ export default function Candidates() {
         pushToast('error', getErrorMessage(error))
       }
     )
-
-    return unsubscribe
   }, [user?.uid, pushToast])
 
   /* ---------- job titles for the role suggestions ---------- */
-  // Assumes your Jobs page saves documents in a "jobs" collection with an
-  // ownerId and a title. If it doesn't, the field simply stays free text.
 
   useEffect(() => {
     if (!user?.uid) {
@@ -576,20 +662,13 @@ export default function Candidates() {
       return undefined
     }
 
-    const jobsQuery = query(
-      collection(db, 'jobs'),
-      where('ownerId', '==', user.uid)
-    )
-
-    const unsubscribe = onSnapshot(
-      jobsQuery,
+    return onSnapshot(
+      query(collection(db, 'jobs'), where('ownerId', '==', user.uid)),
       (snapshot) => {
         const titles = snapshot.docs
           .map((jobDoc) => {
             const data = jobDoc.data()
-            return String(
-              data.title || data.jobTitle || data.role || data.name || ''
-            ).trim()
+            return String(data.title || data.jobTitle || data.role || data.name || '').trim()
           })
           .filter(Boolean)
 
@@ -600,8 +679,6 @@ export default function Candidates() {
         setJobTitles([])
       }
     )
-
-    return unsubscribe
   }, [user?.uid])
 
   /* ---------- timeline for the open profile ---------- */
@@ -609,22 +686,16 @@ export default function Candidates() {
   useEffect(() => {
     setFeedbackRating(0)
     setFeedbackText('')
-
-    if (!selectedId || !user?.uid) {
-      setActivity([])
-      return undefined
-    }
-
     setActivity([])
 
-    const activityQuery = query(
-      collection(db, 'candidates', selectedId, 'activity'),
-      orderBy('createdAt', 'desc'),
-      limit(25)
-    )
+    if (!selectedId || !user?.uid) return undefined
 
-    const unsubscribe = onSnapshot(
-      activityQuery,
+    return onSnapshot(
+      query(
+        collection(db, 'candidates', selectedId, 'activity'),
+        orderBy('createdAt', 'desc'),
+        limit(25)
+      ),
       (snapshot) => {
         setActivity(
           snapshot.docs.map((item) => {
@@ -645,8 +716,6 @@ export default function Candidates() {
         setActivity([])
       }
     )
-
-    return unsubscribe
   }, [selectedId, user?.uid])
 
   /* ---------- derived data ---------- */
@@ -669,10 +738,7 @@ export default function Candidates() {
     return counts
   }, [candidates])
 
-  const followUpCount = useMemo(
-    () => candidates.filter(isStale).length,
-    [candidates]
-  )
+  const followUpCount = useMemo(() => candidates.filter(isStale).length, [candidates])
 
   const filteredCandidates = useMemo(() => {
     const searchTerm = search.trim().toLowerCase()
@@ -705,14 +771,11 @@ export default function Candidates() {
       }
       if (sortBy === 'status') {
         return (
-          STATUSES.indexOf(a.status) - STATUSES.indexOf(b.status) ||
-          b.createdMs - a.createdMs
+          STATUSES.indexOf(a.status) - STATUSES.indexOf(b.status) || b.createdMs - a.createdMs
         )
       }
       if (sortBy === 'rating') {
-        return (
-          averageRating(b) - averageRating(a) || b.createdMs - a.createdMs
-        )
+        return averageRating(b) - averageRating(a) || b.createdMs - a.createdMs
       }
       return b.createdMs - a.createdMs
     })
@@ -723,13 +786,8 @@ export default function Candidates() {
   const shownCandidates = filteredCandidates.slice(0, visibleCount)
 
   const boardGroups = useMemo(() => {
-    const groups = {}
-    STATUSES.forEach((status) => {
-      groups[status] = []
-    })
-    filteredCandidates.forEach((candidate) => {
-      if (groups[candidate.status]) groups[candidate.status].push(candidate)
-    })
+    const groups = Object.fromEntries(STATUSES.map((status) => [status, []]))
+    filteredCandidates.forEach((candidate) => groups[candidate.status]?.push(candidate))
     return groups
   }, [filteredCandidates])
 
@@ -741,35 +799,19 @@ export default function Candidates() {
   const allShownSelected =
     shownCandidates.length > 0 &&
     shownCandidates.every((candidate) => selectedIds.has(candidate.id))
-  const someShownSelected = shownCandidates.some((candidate) =>
-    selectedIds.has(candidate.id)
-  )
-
-  const totalCandidates = candidates.length
-  const matchedCandidates = useMemo(
-    () =>
-      candidates.filter((candidate) =>
-        MATCHED_STATUSES.includes(candidate.status)
-      ).length,
-    [candidates]
-  )
-  const shortlistedCandidates = statusCounts.Shortlisted || 0
+  const someShownSelected = shownCandidates.some((candidate) => selectedIds.has(candidate.id))
 
   const chips = useMemo(
     () => [
-      { key: 'All', label: 'All', count: totalCandidates },
+      { key: 'All', label: 'All', count: candidates.length },
       ...(followUpCount > 0 || filterStatus === 'Follow-up'
         ? [{ key: 'Follow-up', label: 'Needs follow-up', count: followUpCount }]
         : []),
-      ...STATUSES.filter(
-        (status) => statusCounts[status] || status === filterStatus
-      ).map((status) => ({
-        key: status,
-        label: status,
-        count: statusCounts[status] || 0,
-      })),
+      ...STATUSES.filter((status) => statusCounts[status] || status === filterStatus).map(
+        (status) => ({ key: status, label: status, count: statusCounts[status] || 0 })
+      ),
     ],
-    [statusCounts, totalCandidates, followUpCount, filterStatus]
+    [statusCounts, candidates.length, followUpCount, filterStatus]
   )
 
   const emailSuggestions = useMemo(
@@ -807,11 +849,9 @@ export default function Candidates() {
   function toggleSelectAll() {
     setSelectedIds((previous) => {
       const next = new Set(previous)
-      if (allShownSelected) {
-        shownCandidates.forEach((candidate) => next.delete(candidate.id))
-      } else {
-        shownCandidates.forEach((candidate) => next.add(candidate.id))
-      }
+      shownCandidates.forEach((candidate) =>
+        allShownSelected ? next.delete(candidate.id) : next.add(candidate.id)
+      )
       return next
     })
   }
@@ -821,10 +861,6 @@ export default function Candidates() {
   function updateForm(event) {
     const { name, value } = event.target
     setForm((previous) => ({ ...previous, [name]: value }))
-  }
-
-  function pickEmailSuggestion(value) {
-    setForm((previous) => ({ ...previous, email: value }))
   }
 
   // When the recruiter leaves the email box, finish the address for them.
@@ -875,11 +911,6 @@ export default function Candidates() {
   function acceptFile(file) {
     setFormError('')
 
-    if (!file) {
-      setSelectedFile(null)
-      return
-    }
-
     const validationError = validateResume(file)
 
     if (validationError) {
@@ -889,11 +920,7 @@ export default function Candidates() {
       return
     }
 
-    setSelectedFile(file)
-  }
-
-  function handleFileChange(event) {
-    acceptFile(event.target.files?.[0] || null)
+    setSelectedFile(file || null)
   }
 
   function handleDrop(event) {
@@ -902,10 +929,10 @@ export default function Candidates() {
     acceptFile(event.dataTransfer.files?.[0] || null)
   }
 
-  /* ---------- keyboard shortcuts ---------- */
+  /* ---------- keyboard shortcuts + dialog focus ---------- */
 
   const dialogOpen =
-    showAddModal || Boolean(selectedId) || deleteTargets.length > 0 || notice
+    showAddModal || Boolean(selectedId) || deleteTargets.length > 0 || Boolean(notice)
 
   useEffect(() => {
     function onKeyDown(event) {
@@ -943,17 +970,14 @@ export default function Candidates() {
     openAddModal,
   ])
 
-  /* ---------- keep Tab focus inside the open dialog ---------- */
-
+  // Keep Tab focus inside the open dialog.
   useEffect(() => {
     if (!dialogOpen) return undefined
 
     function onTab(event) {
       if (event.key !== 'Tab') return
 
-      const dialogs = document.querySelectorAll(
-        '[role="dialog"],[role="alertdialog"]'
-      )
+      const dialogs = document.querySelectorAll('[role="dialog"],[role="alertdialog"]')
       const top = dialogs[dialogs.length - 1]
       if (!top) return
 
@@ -984,6 +1008,16 @@ export default function Candidates() {
 
   /* ---------- resume upload (runs in the background) ---------- */
 
+  async function removeStoredFile(path) {
+    try {
+      await deleteObject(ref(storage, path))
+    } catch (error) {
+      if (error?.code !== 'storage/object-not-found') {
+        console.error('Resume cleanup failed:', error)
+      }
+    }
+  }
+
   async function uploadResume(candidateId, file, previousPath = '') {
     setUploadingIds((previous) => new Set(previous).add(candidateId))
 
@@ -1001,45 +1035,27 @@ export default function Candidates() {
 
       const resumeUrl = await getDownloadURL(resumeReference)
 
-      await updateDoc(doc(db, 'candidates', candidateId), {
+      await updateDoc(candidateRef(candidateId), {
         resumeUrl,
         resumeName: file.name,
         resumePath: path,
         updatedAt: serverTimestamp(),
       })
 
-      logActivity(candidateId, {
-        type: 'resume',
-        text: previousPath
-          ? `Resume replaced (${file.name})`
-          : `Resume attached (${file.name})`,
-      })
+      logActivity(
+        candidateId,
+        'resume',
+        previousPath ? `Resume replaced (${file.name})` : `Resume attached (${file.name})`
+      )
 
       // The new resume is saved, so the replaced one can go.
-      if (previousPath && previousPath !== path) {
-        try {
-          await deleteObject(ref(storage, previousPath))
-        } catch (cleanupError) {
-          if (cleanupError?.code !== 'storage/object-not-found') {
-            console.error('Old resume cleanup failed:', cleanupError)
-          }
-        }
-      }
+      if (previousPath && previousPath !== path) await removeStoredFile(previousPath)
 
-      pushToast(
-        'success',
-        previousPath ? 'Resume replaced' : 'Resume attached to the profile'
-      )
+      pushToast('success', previousPath ? 'Resume replaced' : 'Resume attached to the profile')
     } catch (error) {
       console.error('Resume upload failed:', error)
 
-      if (uploaded) {
-        try {
-          await deleteObject(ref(storage, path))
-        } catch (cleanupError) {
-          console.error('Resume cleanup failed:', cleanupError)
-        }
-      }
+      if (uploaded) await removeStoredFile(path)
 
       pushToast(
         'error',
@@ -1058,9 +1074,7 @@ export default function Candidates() {
 
   function validateForm(excludeId = null) {
     if (!user?.uid) {
-      return {
-        error: 'Your session has expired. Please sign in to continue.',
-      }
+      return { error: 'Your session has expired. Please sign in to continue.' }
     }
 
     const name = form.name.trim()
@@ -1074,46 +1088,29 @@ export default function Candidates() {
     }
 
     if (!EMAIL_PATTERN.test(email)) {
-      return {
-        error: 'That email doesn’t look right. Please check it and try again.',
-      }
+      return { error: 'That email doesn’t look right. Please check it and try again.' }
     }
 
     if (phone) {
       const digitCount = phone.replace(/\D/g, '').length
       if (digitCount < 7 || digitCount > 15) {
         return {
-          error:
-            'That phone number doesn’t look right. Use 7 to 15 digits, or leave it empty.',
+          error: 'That phone number doesn’t look right. Use 7 to 15 digits, or leave it empty.',
         }
       }
     }
 
-    const duplicate = candidates.find(
-      (candidate) =>
-        candidate.id !== excludeId &&
-        candidate.email.toLowerCase() === email
-    )
+    const others = candidates.filter((candidate) => candidate.id !== excludeId)
 
+    const duplicate = others.find((candidate) => candidate.email.toLowerCase() === email)
     if (duplicate) {
-      return {
-        error: `${duplicate.name} is already on your list with this email address.`,
-      }
+      return { error: `${duplicate.name} is already on your list with this email address.` }
     }
 
-    if (phone) {
-      const duplicatePhone = candidates.find(
-        (candidate) =>
-          candidate.id !== excludeId &&
-          candidate.phone &&
-          phoneKey(candidate.phone) === phoneKey(phone)
-      )
-
-      if (duplicatePhone) {
-        return {
-          error: `${duplicatePhone.name} is already on your list with this phone number.`,
-        }
-      }
+    const duplicatePhone =
+      phone && others.find((c) => c.phone && phoneKey(c.phone) === phoneKey(phone))
+    if (duplicatePhone) {
+      return { error: `${duplicatePhone.name} is already on your list with this phone number.` }
     }
 
     const resumeError = validateResume(selectedFile)
@@ -1122,7 +1119,7 @@ export default function Candidates() {
     return { values: { name, role, email, phone, notes } }
   }
 
-  /* ---------- add candidate ---------- */
+  /* ---------- add + edit candidate ---------- */
 
   async function handleAddCandidate(keepOpen = false) {
     const { error, values } = validateForm()
@@ -1132,54 +1129,35 @@ export default function Candidates() {
       return
     }
 
-    const { name, role, email, phone, notes } = values
     const fileToUpload = selectedFile
 
     setSaving(true)
     setFormError('')
 
     try {
-      const documentReference = await addDoc(collection(db, 'candidates'), {
-        ownerId: user.uid,
-        name,
-        role,
-        email,
-        phone,
-        status: 'Screening',
-        additionalinformation: notes,
-        resumeUrl: '',
-        resumeName: '',
-        resumePath: '',
-        ratingSum: 0,
-        ratingCount: 0,
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      })
+      const documentReference = await addDoc(
+        collection(db, 'candidates'),
+        toCandidateDoc(user.uid, values)
+      )
 
-      logActivity(documentReference.id, {
-        type: 'created',
-        text: 'Added to the pipeline at Screening',
-      })
+      logActivity(documentReference.id, 'created', 'Added to the pipeline at Screening')
 
       resetForm()
 
-      if (keepOpen) {
-        nameInputRef.current?.focus()
-      } else {
-        setShowAddModal(false)
-      }
+      if (keepOpen) nameInputRef.current?.focus()
+      else setShowAddModal(false)
 
       flashRow(documentReference.id)
 
       if (keepOpen) {
-        pushToast('success', `${name} added. Ready for the next one.`)
+        pushToast('success', `${values.name} added. Ready for the next one.`)
       } else {
         setNotice({
           type: 'added',
           candidateId: documentReference.id,
-          name,
-          role,
-          email,
+          name: values.name,
+          role: values.role,
+          email: values.email,
           resumeName: fileToUpload?.name || '',
         })
       }
@@ -1192,8 +1170,6 @@ export default function Candidates() {
       setSaving(false)
     }
   }
-
-  /* ---------- edit candidate ---------- */
 
   async function handleUpdateCandidate() {
     if (!editingCandidate) {
@@ -1208,7 +1184,6 @@ export default function Candidates() {
       return
     }
 
-    const { name, role, email, phone, notes } = values
     const fileToUpload = selectedFile
     const previousPath = editingCandidate.resumePath
     const candidateId = editingCandidate.id
@@ -1217,25 +1192,22 @@ export default function Candidates() {
     setFormError('')
 
     try {
-      await updateDoc(doc(db, 'candidates', candidateId), {
-        name,
-        role,
-        email,
-        phone,
-        additionalinformation: notes,
+      await updateDoc(candidateRef(candidateId), {
+        name: values.name,
+        role: values.role,
+        email: values.email,
+        phone: values.phone,
+        additionalinformation: values.notes,
         updatedAt: serverTimestamp(),
       })
 
-      logActivity(candidateId, {
-        type: 'edited',
-        text: 'Profile details updated',
-      })
+      logActivity(candidateId, 'edited', 'Profile details updated')
 
       setShowAddModal(false)
       resetForm()
 
       flashRow(candidateId)
-      pushToast('success', `${name} updated`)
+      pushToast('success', `${values.name} updated`)
 
       if (fileToUpload) uploadResume(candidateId, fileToUpload, previousPath)
     } catch (updateError) {
@@ -1258,45 +1230,33 @@ export default function Candidates() {
   /* ---------- update status ---------- */
 
   async function handleStatusChange(candidate, newStatus) {
-    if (!user?.uid || !candidate?.id || !newStatus) return
-    if (candidate.status === newStatus) return
+    if (!user?.uid || !candidate?.id || !newStatus || candidate.status === newStatus) return
 
     const previousStatus = candidate.status
+    const setStatus = (status, extra = {}) =>
+      setCandidates((previous) =>
+        previous.map((item) =>
+          item.id === candidate.id ? { ...item, status, ...extra } : item
+        )
+      )
 
     setUpdatingStatusId(candidate.id)
 
     // Instant UI update; the live listener confirms it.
-    setCandidates((previous) =>
-      previous.map((item) =>
-        item.id === candidate.id
-          ? { ...item, status: newStatus, updatedMs: Date.now() }
-          : item
-      )
-    )
+    setStatus(newStatus, { updatedMs: Date.now() })
 
     try {
-      await updateDoc(doc(db, 'candidates', candidate.id), {
+      await updateDoc(candidateRef(candidate.id), {
         status: newStatus,
         updatedAt: serverTimestamp(),
       })
 
-      logActivity(candidate.id, {
-        type: 'status',
-        text: `Moved from ${previousStatus} to ${newStatus}`,
-      })
+      logActivity(candidate.id, 'status', `Moved from ${previousStatus} to ${newStatus}`)
 
-      pushToast('success', `${candidate.name} moved to ${newStatus}`, {
-        duration: 2500,
-      })
+      pushToast('success', `${candidate.name} moved to ${newStatus}`, { duration: 2500 })
     } catch (error) {
       console.error('Failed to update candidate status:', error)
-
-      setCandidates((previous) =>
-        previous.map((item) =>
-          item.id === candidate.id ? { ...item, status: previousStatus } : item
-        )
-      )
-
+      setStatus(previousStatus)
       pushToast('error', `Status wasn’t changed. ${getErrorMessage(error)}`)
     } finally {
       setUpdatingStatusId(null)
@@ -1308,47 +1268,29 @@ export default function Candidates() {
   async function handleBulkStatus(newStatus) {
     if (!user?.uid || !newStatus || selectedList.length === 0) return
 
-    const targets = selectedList.filter(
-      (candidate) => candidate.status !== newStatus
-    )
+    const targets = selectedList.filter((candidate) => candidate.status !== newStatus)
 
     if (targets.length === 0) {
-      pushToast('success', `Everyone selected is already at ${newStatus}`, {
-        duration: 2500,
-      })
+      pushToast('success', `Everyone selected is already at ${newStatus}`, { duration: 2500 })
       return
     }
 
     setBulkBusy(true)
 
     try {
-      for (let i = 0; i < targets.length; i += BATCH_SIZE) {
-        const batch = writeBatch(db)
-
-        targets.slice(i, i + BATCH_SIZE).forEach((candidate) => {
-          batch.update(doc(db, 'candidates', candidate.id), {
-            status: newStatus,
-            updatedAt: serverTimestamp(),
-          })
-          batch.set(doc(collection(db, 'candidates', candidate.id, 'activity')), {
-            type: 'status',
-            text: `Moved from ${candidate.status} to ${newStatus}`,
-            by: actorName,
-            byUid: user.uid,
-            createdAt: serverTimestamp(),
-          })
+      await commitInBatches(targets, (batch, candidate) => {
+        batch.update(candidateRef(candidate.id), {
+          status: newStatus,
+          updatedAt: serverTimestamp(),
         })
-
-        await batch.commit()
-      }
+        batch.set(
+          newActivityRef(candidate.id),
+          activityEntry('status', `Moved from ${candidate.status} to ${newStatus}`)
+        )
+      })
 
       setSelectedIds(new Set())
-      pushToast(
-        'success',
-        `${targets.length} candidate${
-          targets.length === 1 ? '' : 's'
-        } moved to ${newStatus}`
-      )
+      pushToast('success', `${plural(targets.length, 'candidate')} moved to ${newStatus}`)
     } catch (error) {
       console.error('Bulk status change failed:', error)
       pushToast('error', `Stages weren’t changed. ${getErrorMessage(error)}`)
@@ -1366,48 +1308,30 @@ export default function Candidates() {
     setDeleting(true)
 
     try {
-      for (let i = 0; i < list.length; i += 400) {
-        const batch = writeBatch(db)
-        list.slice(i, i + 400).forEach((candidate) => {
-          batch.delete(doc(db, 'candidates', candidate.id))
-        })
-        await batch.commit()
-      }
+      await commitInBatches(list, (batch, candidate) =>
+        batch.delete(candidateRef(candidate.id))
+      )
 
       const removedIds = new Set(list.map((candidate) => candidate.id))
 
       setDeleteTargets([])
       if (removedIds.has(selectedId)) setSelectedId(null)
-      setSelectedIds((previous) => {
-        const next = new Set(previous)
-        removedIds.forEach((id) => next.delete(id))
-        return next
-      })
+      setSelectedIds((previous) => new Set([...previous].filter((id) => !removedIds.has(id))))
 
       // Keep resume files until the undo window closes,
       // so a restored candidate still has their resume.
       list.forEach((candidate) => {
         if (!candidate.resumePath) return
 
-        const timer = setTimeout(async () => {
+        const timer = setTimeout(() => {
           pendingResumeDeletes.current.delete(candidate.id)
-          try {
-            await deleteObject(ref(storage, candidate.resumePath))
-          } catch (storageError) {
-            if (storageError?.code !== 'storage/object-not-found') {
-              console.error('Resume cleanup failed:', storageError)
-            }
-          }
+          removeStoredFile(candidate.resumePath)
         }, UNDO_WINDOW_MS + 500)
 
-        pendingResumeDeletes.current.set(candidate.id, {
-          timer,
-          path: candidate.resumePath,
-        })
+        pendingResumeDeletes.current.set(candidate.id, { timer, path: candidate.resumePath })
       })
 
-      const label =
-        list.length === 1 ? list[0].name : `${list.length} candidates`
+      const label = list.length === 1 ? list[0].name : `${list.length} candidates`
 
       pushToast('success', `${label} removed from your list`, {
         duration: UNDO_WINDOW_MS,
@@ -1420,9 +1344,9 @@ export default function Candidates() {
       setNotice({
         type: 'error',
         title: 'Couldn’t remove candidate',
-        message: `${
-          list.length === 1 ? list[0].name : 'These candidates'
-        } ${list.length === 1 ? 'is' : 'are'} still on your list. ${getErrorMessage(error)}`,
+        message: `${list.length === 1 ? list[0].name : 'These candidates'} ${
+          list.length === 1 ? 'is' : 'are'
+        } still on your list. ${getErrorMessage(error)}`,
       })
     } finally {
       setDeleting(false)
@@ -1441,30 +1365,24 @@ export default function Candidates() {
     })
 
     try {
-      for (let i = 0; i < list.length; i += 400) {
-        const batch = writeBatch(db)
-
-        list.slice(i, i + 400).forEach((candidate) => {
-          batch.set(doc(db, 'candidates', candidate.id), {
-            ownerId: user.uid,
-            name: candidate.name,
-            role: candidate.role,
-            email: candidate.email,
-            phone: candidate.phone,
-            status: candidate.status,
-            additionalinformation: candidate.notes,
-            resumeUrl: candidate.resumeUrl,
-            resumeName: candidate.resumeName,
-            resumePath: candidate.resumePath,
-            ratingSum: candidate.ratingSum,
-            ratingCount: candidate.ratingCount,
-            createdAt: Timestamp.fromMillis(candidate.createdMs),
-            updatedAt: serverTimestamp(),
-          })
-        })
-
-        await batch.commit()
-      }
+      await commitInBatches(list, (batch, candidate) =>
+        batch.set(
+          candidateRef(candidate.id),
+          toCandidateDoc(
+            user.uid,
+            { ...candidate },
+            {
+              status: candidate.status,
+              resumeUrl: candidate.resumeUrl,
+              resumeName: candidate.resumeName,
+              resumePath: candidate.resumePath,
+              ratingSum: candidate.ratingSum,
+              ratingCount: candidate.ratingCount,
+              createdAt: Timestamp.fromMillis(candidate.createdMs),
+            }
+          )
+        )
+      )
 
       if (list.length === 1) flashRow(list[0].id)
 
@@ -1491,27 +1409,21 @@ export default function Candidates() {
     }
 
     const candidateId = selectedCandidate.id
-    const text = feedbackText.trim()
 
     setSavingFeedback(true)
 
     try {
       const batch = writeBatch(db)
 
-      batch.update(doc(db, 'candidates', candidateId), {
+      batch.update(candidateRef(candidateId), {
         ratingSum: increment(feedbackRating),
         ratingCount: increment(1),
         updatedAt: serverTimestamp(),
       })
-
-      batch.set(doc(collection(db, 'candidates', candidateId, 'activity')), {
-        type: 'feedback',
-        text,
-        rating: feedbackRating,
-        by: actorName,
-        byUid: user.uid,
-        createdAt: serverTimestamp(),
-      })
+      batch.set(
+        newActivityRef(candidateId),
+        activityEntry('feedback', feedbackText.trim(), { rating: feedbackRating })
+      )
 
       await batch.commit()
 
@@ -1532,37 +1444,22 @@ export default function Candidates() {
     if (list.length === 0) return
 
     const rows = [
-      [
-        'Name',
-        'Email',
-        'Phone',
-        'Role',
-        'Status',
-        'Rating',
-        'Notes',
-        'Resume link',
-        'Added on',
-      ],
+      ['Name', 'Email', 'Phone', 'Role', 'Status', 'Rating', 'Notes', 'Resume link', 'Added on'],
       ...list.map((candidate) => [
         candidate.name,
         candidate.email,
         candidate.phone,
         candidate.role,
         candidate.status,
-        averageRating(candidate)
-          ? averageRating(candidate).toFixed(1)
-          : '',
+        averageRating(candidate) ? averageRating(candidate).toFixed(1) : '',
         candidate.notes,
         candidate.resumeUrl,
         new Date(candidate.createdMs).toLocaleDateString(),
       ]),
     ]
 
-    const csv =
-      '\ufeff' + rows.map((row) => row.map(csvCell).join(',')).join('\r\n')
-
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
-    const url = URL.createObjectURL(blob)
+    const csv = '\ufeff' + rows.map((row) => row.map(csvCell).join(',')).join('\r\n')
+    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8;' }))
     const link = document.createElement('a')
 
     link.href = url
@@ -1572,11 +1469,7 @@ export default function Candidates() {
     link.remove()
     setTimeout(() => URL.revokeObjectURL(url), 1000)
 
-    pushToast(
-      'success',
-      `Exported ${list.length} candidate${list.length === 1 ? '' : 's'}`,
-      { duration: 2500 }
-    )
+    pushToast('success', `Exported ${plural(list.length, 'candidate')}`, { duration: 2500 })
   }
 
   /* ---------- import from CSV ---------- */
@@ -1602,13 +1495,12 @@ export default function Candidates() {
     try {
       const rows = parseCsv(await file.text())
 
-      if (rows.length < 2) {
-        throw new Error('That file has no candidate rows.')
-      }
+      if (rows.length < 2) throw new Error('That file has no candidate rows.')
 
       const headers = rows[0].map((header) => header.trim().toLowerCase())
-      const column = (...names) =>
-        headers.findIndex((header) => names.includes(header))
+      const column = (...names) => headers.findIndex((header) => names.includes(header))
+      const cell = (row, index, max) =>
+        index === -1 ? '' : (row[index] || '').trim().slice(0, max)
 
       const nameIndex = column('name', 'full name')
       const emailIndex = column('email', 'email address')
@@ -1620,17 +1512,15 @@ export default function Candidates() {
         throw new Error('The file needs at least a "Name" and an "Email" column.')
       }
 
-      const knownEmails = new Set(
-        candidates.map((candidate) => candidate.email.toLowerCase())
-      )
+      const knownEmails = new Set(candidates.map((candidate) => candidate.email.toLowerCase()))
       const toAdd = []
       let skippedInvalid = 0
       let skippedDuplicate = 0
 
       rows.slice(1).forEach((row) => {
-        if (row.every((cell) => !cell.trim())) return
+        if (row.every((value) => !value.trim())) return
 
-        const name = (row[nameIndex] || '').trim().slice(0, 100)
+        const name = cell(row, nameIndex, 100)
         const email = normalizeEmail(row[emailIndex] || '')
 
         if (!name || !EMAIL_PATTERN.test(email)) {
@@ -1648,13 +1538,9 @@ export default function Candidates() {
         toAdd.push({
           name,
           email,
-          role:
-            (roleIndex === -1 ? '' : row[roleIndex] || '').trim().slice(0, 150) ||
-            'Not specified',
-          phone: phoneIndex === -1 ? '' : normalizePhone(row[phoneIndex] || ''),
-          notes: (notesIndex === -1 ? '' : row[notesIndex] || '')
-            .trim()
-            .slice(0, 3000),
+          role: cell(row, roleIndex, 150) || 'Not specified',
+          phone: normalizePhone(cell(row, phoneIndex, 30)),
+          notes: cell(row, notesIndex, 3000),
         })
       })
 
@@ -1664,37 +1550,11 @@ export default function Candidates() {
         )
       }
 
-      for (let i = 0; i < toAdd.length; i += 400) {
-        const batch = writeBatch(db)
+      await commitInBatches(toAdd, (batch, item) =>
+        batch.set(doc(collection(db, 'candidates')), toCandidateDoc(user.uid, item))
+      )
 
-        toAdd.slice(i, i + 400).forEach((item) => {
-          batch.set(doc(collection(db, 'candidates')), {
-            ownerId: user.uid,
-            name: item.name,
-            role: item.role,
-            email: item.email,
-            phone: item.phone,
-            status: 'Screening',
-            additionalinformation: item.notes,
-            resumeUrl: '',
-            resumeName: '',
-            resumePath: '',
-            ratingSum: 0,
-            ratingCount: 0,
-            createdAt: serverTimestamp(),
-            updatedAt: serverTimestamp(),
-          })
-        })
-
-        await batch.commit()
-      }
-
-      setNotice({
-        type: 'import',
-        added: toAdd.length,
-        skippedInvalid,
-        skippedDuplicate,
-      })
+      setNotice({ type: 'import', added: toAdd.length, skippedInvalid, skippedDuplicate })
     } catch (error) {
       console.error('Import failed:', error)
       pushToast('error', getErrorMessage(error))
@@ -1719,438 +1579,357 @@ export default function Candidates() {
      UI
   ========================================= */
 
-  const stop = (event) => event.stopPropagation()
-
-  const isEditing = Boolean(editingId)
   const currentResumeName = isEditing ? editingCandidate?.resumeName || '' : ''
   const hasCurrentResume = isEditing && Boolean(editingCandidate?.resumeUrl)
-  const isBoard = view === 'board'
   const deleteIsMany = deleteTargets.length > 1
+  const hasFilters = Boolean(search) || filterStatus !== 'All'
 
   return (
     <div className="shell">
       <header className="topbar glass glass--strong">
         <Brand />
-
         <nav>
-          <NavLink to="/" end>
-            Overview
-          </NavLink>
+          <NavLink to="/" end>Overview</NavLink>
           <NavLink to="/jobs">Jobs</NavLink>
           <NavLink to="/candidates">Candidates</NavLink>
+          <NavLink to="/screening">Screening</NavLink>
+          <NavLink to="/interviews">Interviews</NavLink>
           <NavLink to="/reports">Reports</NavLink>
         </nav>
-
         <span className="spacer" />
-
+        <NavLink to="/profile" className="avatar" title={user?.email}>
+          {initials}
+        </NavLink>
         <button className="btn btn--ghost" onClick={signOut}>
           Log out
         </button>
-
-        <span className="avatar" title={user?.email}>
-          {initials}
-        </span>
       </header>
 
-      <main className="page">
-        <section className="hero">
-          <div className="hero__text">
-            <span className="pill pill--live">
-              <span className="dot" />
-              Candidate workspace
-            </span>
+      <main className="page jobs-page">
+        <section className="jobs-page__head">
+          <div>
+            <span className="eyebrow">Your workspace</span>
+            <h1>Candidates</h1>
+            <p>Manage candidates, review resumes, and track each one through your hiring process.</p>
+          </div>
 
-            <h1 style={{ marginTop: 14 }}>Candidates</h1>
+          <div className="cand-head__actions">
+            <button
+              type="button"
+              className="btn"
+              onClick={() => importInputRef.current?.click()}
+              disabled={importing}
+              title="Add many candidates from a CSV file (Name, Email, Role, Phone, Notes)"
+            >
+              {importing ? 'Importing…' : 'Import CSV'}
+            </button>
 
-            <p>
-              Manage candidates, review resumes, and track each candidate
-              through your hiring process.
-            </p>
+            <button
+              type="button"
+              className="btn"
+              onClick={() => exportCandidates(filteredCandidates)}
+              disabled={filteredCandidates.length === 0}
+              title="Download the candidates shown as a CSV file"
+            >
+              Export CSV
+            </button>
 
-            <div className="hero__actions">
-              <button className="btn btn--primary" onClick={openAddModal}>
-                Add candidate
-              </button>
+            <button className="btn btn--primary jobs-page__add" onClick={openAddModal}>
+              <span aria-hidden="true">＋</span> Add candidate
+            </button>
+
+            <input
+              ref={importInputRef}
+              type="file"
+              accept=".csv,text/csv"
+              onChange={handleImportFile}
+              aria-label="Import candidates from a CSV file"
+              className="visually-hidden"
+            />
+          </div>
+        </section>
+
+        <section className="jobs-table-wrap glass glass--lg cand-panel">
+          <div className="cand-toolbar">
+            <div className="candidate-search">
+              <input
+                ref={searchRef}
+                type="search"
+                placeholder="Search name, email, role or notes"
+                aria-label="Search candidates"
+                value={searchInput}
+                onChange={(event) => setSearchInput(event.target.value)}
+              />
+              {!searchInput && <kbd aria-hidden="true">/</kbd>}
+            </div>
+
+            <select
+              className="candidate-sort"
+              value={sortBy}
+              onChange={(event) => setSortBy(event.target.value)}
+              aria-label="Sort candidates"
+            >
+              {SORT_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+
+            <div className="candidate-view-toggle" role="group" aria-label="Choose layout">
+              {['list', 'board'].map((mode) => (
+                <button
+                  key={mode}
+                  type="button"
+                  className={view === mode ? 'is-active' : ''}
+                  aria-pressed={view === mode}
+                  onClick={() => setView(mode)}
+                >
+                  {mode === 'list' ? 'List' : 'Board'}
+                </button>
+              ))}
             </div>
           </div>
 
-          <aside className="hero__stats glass glass--lg">
-            <div className="stat">
-              <b>{totalCandidates}</b>
-              <span>Total candidates</span>
+          {!isBoard && (
+            <div className="candidate-chips" role="group" aria-label="Filter by status">
+              {chips.map((chip) => (
+                <button
+                  key={chip.key}
+                  type="button"
+                  className={`candidate-chip ${
+                    filterStatus === chip.key ? 'candidate-chip--active' : ''
+                  }`}
+                  aria-pressed={filterStatus === chip.key}
+                  onClick={() => setFilterStatus(chip.key)}
+                >
+                  {chip.label}
+                  <span className="candidate-chip__count">{chip.count}</span>
+                </button>
+              ))}
             </div>
+          )}
 
-            <div className="stat">
-              <b>{matchedCandidates}</b>
-              <span>JD matched</span>
-            </div>
-
-            <div className="stat">
-              <b>{shortlistedCandidates}</b>
-              <span>Shortlisted</span>
-            </div>
-          </aside>
-        </section>
-
-        <section className="section">
-          <div className="section__head">
-            <h2>All candidates</h2>
-
-            <div className="candidate-toolbar">
-              <div className="candidate-search">
-                <input
-                  ref={searchRef}
-                  type="search"
-                  placeholder="Search name, email, role or notes"
-                  aria-label="Search candidates"
-                  value={searchInput}
-                  onChange={(event) => setSearchInput(event.target.value)}
-                />
-                {!searchInput && <kbd aria-hidden="true">/</kbd>}
-              </div>
+          {!isBoard && selectedList.length > 0 && (
+            <div className="bulk-bar" role="region" aria-label="Bulk actions">
+              <b>{selectedList.length} selected</b>
 
               <select
-                className="candidate-sort"
-                value={sortBy}
-                onChange={(event) => setSortBy(event.target.value)}
-                aria-label="Sort candidates"
+                className="candidate-sort bulk-bar__select"
+                value=""
+                onChange={(event) => handleBulkStatus(event.target.value)}
+                disabled={bulkBusy}
+                aria-label="Move selected candidates to a stage"
               >
-                {SORT_OPTIONS.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
+                <option value="" disabled>
+                  {bulkBusy ? 'Updating…' : 'Move to stage…'}
+                </option>
+                {STATUSES.map((status) => (
+                  <option key={status} value={status}>
+                    {status}
                   </option>
                 ))}
               </select>
 
-              <div
-                className="candidate-view-toggle"
-                role="group"
-                aria-label="Choose layout"
-              >
-                <button
-                  type="button"
-                  className={!isBoard ? 'is-active' : ''}
-                  aria-pressed={!isBoard}
-                  onClick={() => setView('list')}
-                >
-                  List
-                </button>
-                <button
-                  type="button"
-                  className={isBoard ? 'is-active' : ''}
-                  aria-pressed={isBoard}
-                  onClick={() => setView('board')}
-                >
-                  Board
-                </button>
-              </div>
-
               <button
                 type="button"
                 className="btn btn--small"
-                onClick={() => importInputRef.current?.click()}
-                disabled={importing}
-                title="Add many candidates from a CSV file (Name, Email, Role, Phone, Notes)"
+                onClick={() => exportCandidates(selectedList)}
               >
-                {importing ? 'Importing…' : 'Import CSV'}
+                Export
               </button>
 
               <button
                 type="button"
-                className="btn btn--small"
-                onClick={() => exportCandidates(filteredCandidates)}
-                disabled={filteredCandidates.length === 0}
-                title="Download the candidates shown as a CSV file"
+                className="btn btn--small btn--danger"
+                onClick={() => setDeleteTargets(selectedList)}
+                disabled={bulkBusy}
               >
-                Export CSV
+                Delete
               </button>
 
-              <input
-                ref={importInputRef}
-                type="file"
-                accept=".csv,text/csv"
-                onChange={handleImportFile}
-                aria-label="Import candidates from a CSV file"
-                style={{ display: 'none' }}
-              />
+              <button
+                type="button"
+                className="btn btn--small btn--ghost"
+                onClick={() => setSelectedIds(new Set())}
+              >
+                Clear
+              </button>
             </div>
-          </div>
+          )}
 
-          <div className="candidates glass glass--lg">
-            {!isBoard && (
-              <div
-                className="candidate-chips"
-                role="group"
-                aria-label="Filter by status"
-              >
-                {chips.map((chip) => (
+          {loading ? (
+            <div className="jobs-empty" aria-busy="true">
+              <span className="jobs-empty__icon">···</span>
+              <h2>Loading your candidates</h2>
+              <p>Getting the latest candidates from your workspace.</p>
+            </div>
+          ) : filteredCandidates.length === 0 ? (
+            <div className="jobs-empty">
+              <span className="jobs-empty__icon">{hasFilters ? '⌕' : '＋'}</span>
+              {hasFilters ? (
+                <>
+                  <h2>No matches</h2>
+                  <p>No candidates match your search or filter.</p>
                   <button
-                    key={chip.key}
                     type="button"
-                    className={`candidate-chip ${
-                      filterStatus === chip.key ? 'candidate-chip--active' : ''
-                    }`}
-                    aria-pressed={filterStatus === chip.key}
-                    onClick={() => setFilterStatus(chip.key)}
-                  >
-                    {chip.label}
-                    <span className="candidate-chip__count">{chip.count}</span>
-                  </button>
-                ))}
-              </div>
-            )}
-
-            {!isBoard && selectedList.length > 0 && (
-              <div className="bulk-bar" role="region" aria-label="Bulk actions">
-                <b>{selectedList.length} selected</b>
-
-                <select
-                  className="candidate-sort bulk-bar__select"
-                  value=""
-                  onChange={(event) => handleBulkStatus(event.target.value)}
-                  disabled={bulkBusy}
-                  aria-label="Move selected candidates to a stage"
-                >
-                  <option value="" disabled>
-                    {bulkBusy ? 'Updating…' : 'Move to stage…'}
-                  </option>
-                  {STATUSES.map((status) => (
-                    <option key={status} value={status}>
-                      {status}
-                    </option>
-                  ))}
-                </select>
-
-                <button
-                  type="button"
-                  className="btn btn--small"
-                  onClick={() => exportCandidates(selectedList)}
-                >
-                  Export
-                </button>
-
-                <button
-                  type="button"
-                  className="btn btn--small btn--danger"
-                  onClick={() => setDeleteTargets(selectedList)}
-                  disabled={bulkBusy}
-                >
-                  Delete
-                </button>
-
-                <button
-                  type="button"
-                  className="btn btn--small btn--ghost"
-                  onClick={() => setSelectedIds(new Set())}
-                >
-                  Clear
-                </button>
-              </div>
-            )}
-
-            {!isBoard && (
-              <div className="candidate__header candidate__header--selectable">
-                <span className="candidate__select">
-                  <input
-                    type="checkbox"
-                    checked={allShownSelected}
-                    ref={(element) => {
-                      if (element) {
-                        element.indeterminate =
-                          someShownSelected && !allShownSelected
-                      }
+                    className="btn"
+                    onClick={() => {
+                      setSearchInput('')
+                      setFilterStatus('All')
                     }}
-                    onChange={toggleSelectAll}
-                    disabled={shownCandidates.length === 0}
-                    aria-label="Select all candidates shown"
-                  />
-                </span>
-                <span>Candidate</span>
-                <span>Role</span>
-                <span>Status</span>
-                <span>Action</span>
-              </div>
-            )}
+                  >
+                    Clear filters
+                  </button>
+                </>
+              ) : (
+                <>
+                  <h2>No candidates yet</h2>
+                  <p>Add your first candidate, or import a CSV to get started.</p>
+                  <button type="button" className="btn btn--primary" onClick={openAddModal}>
+                    Add your first candidate
+                  </button>
+                </>
+              )}
+            </div>
+          ) : isBoard ? (
+            <div className="candidate-board" aria-label="Hiring pipeline">
+              {STATUSES.map((status) => {
+                const items = boardGroups[status]
 
-            {loading ? (
-              <div aria-label="Loading candidates" aria-busy="true">
-                {[0, 1, 2, 3].map((item) => (
-                  <div className="candidate-skeleton" key={item}>
-                    <div>
-                      <div className="skeleton-bar" />
+                return (
+                  <div
+                    key={status}
+                    className={`board-col ${dragOverStatus === status ? 'board-col--over' : ''}`}
+                    onDragOver={(event) => {
+                      event.preventDefault()
+                      setDragOverStatus(status)
+                    }}
+                    onDragLeave={() =>
+                      setDragOverStatus((current) => (current === status ? null : current))
+                    }
+                    onDrop={(event) => handleBoardDrop(event, status)}
+                  >
+                    <div className="board-col__head">
+                      <StatusBadge status={status} />
+                      <span className="candidate-chip__count">{items.length}</span>
                     </div>
-                    <div className="skeleton-bar skeleton-bar--short" />
-                    <div className="skeleton-bar skeleton-bar--pill" />
-                    <div className="skeleton-bar skeleton-bar--btn" />
+
+                    <div className="board-col__body">
+                      {items.length === 0 ? (
+                        <p className="board-col__empty">Drop a card here</p>
+                      ) : (
+                        items.map((candidate) => (
+                          <div
+                            key={candidate.id}
+                            className={`board-card ${
+                              highlightId === candidate.id ? 'candidate--new' : ''
+                            }`}
+                            draggable
+                            tabIndex={0}
+                            role="button"
+                            aria-label={`Open ${candidate.name}`}
+                            onDragStart={(event) => {
+                              event.dataTransfer.setData('text/plain', candidate.id)
+                              event.dataTransfer.effectAllowed = 'move'
+                            }}
+                            onClick={() => setSelectedId(candidate.id)}
+                            onKeyDown={(event) => {
+                              if (event.key === 'Enter' || event.key === ' ') {
+                                event.preventDefault()
+                                setSelectedId(candidate.id)
+                              }
+                            }}
+                          >
+                            <b>{candidate.name}</b>
+                            <span>{candidate.role}</span>
+                            <CandidateTags candidate={candidate} />
+                          </div>
+                        ))
+                      )}
+                    </div>
                   </div>
-                ))}
-              </div>
-            ) : shownCandidates.length === 0 ? (
-              <div className="empty-candidates">
-                {search || filterStatus !== 'All' ? (
-                  <>
-                    <p>No candidates match your search or filter.</p>
-                    <button
-                      type="button"
-                      className="btn btn--small"
-                      onClick={() => {
-                        setSearchInput('')
-                        setFilterStatus('All')
-                      }}
-                    >
-                      Clear filters
-                    </button>
-                  </>
-                ) : (
-                  <>
-                    <p>
-                      No candidates yet. Add your first one, or import a CSV
-                      to get started.
-                    </p>
-                    <button
-                      type="button"
-                      className="btn btn--primary btn--small"
-                      onClick={openAddModal}
-                    >
-                      Add candidate
-                    </button>
-                  </>
-                )}
-              </div>
-            ) : isBoard ? (
-              <div className="candidate-board" aria-label="Hiring pipeline">
-                {STATUSES.map((status) => {
-                  const items = boardGroups[status] || []
-
-                  return (
-                    <div
-                      key={status}
-                      className={`board-col ${
-                        dragOverStatus === status ? 'board-col--over' : ''
-                      }`}
-                      onDragOver={(event) => {
-                        event.preventDefault()
-                        setDragOverStatus(status)
-                      }}
-                      onDragLeave={() =>
-                        setDragOverStatus((current) =>
-                          current === status ? null : current
-                        )
-                      }
-                      onDrop={(event) => handleBoardDrop(event, status)}
-                    >
-                      <div className="board-col__head">
-                        <span className={`pill pill--${getStatusType(status)}`}>
-                          <span className="dot" />
-                          {status}
-                        </span>
-                        <span className="candidate-chip__count">
-                          {items.length}
-                        </span>
-                      </div>
-
-                      <div className="board-col__body">
-                        {items.length === 0 ? (
-                          <p className="board-col__empty">Drop a card here</p>
-                        ) : (
-                          items.map((candidate) => (
-                            <div
-                              key={candidate.id}
-                              className={`board-card ${
-                                highlightId === candidate.id
-                                  ? 'candidate--new'
-                                  : ''
-                              }`}
-                              draggable
-                              tabIndex={0}
-                              role="button"
-                              aria-label={`Open ${candidate.name}`}
-                              onDragStart={(event) => {
-                                event.dataTransfer.setData(
-                                  'text/plain',
-                                  candidate.id
-                                )
-                                event.dataTransfer.effectAllowed = 'move'
-                              }}
-                              onClick={() => setSelectedId(candidate.id)}
-                              onKeyDown={(event) => {
-                                if (event.key === 'Enter' || event.key === ' ') {
-                                  event.preventDefault()
-                                  setSelectedId(candidate.id)
-                                }
-                              }}
-                            >
-                              <b>{candidate.name}</b>
-                              <span>{candidate.role}</span>
-                              <CandidateTags candidate={candidate} />
-                            </div>
-                          ))
-                        )}
-                      </div>
-                    </div>
-                  )
-                })}
-              </div>
-            ) : (
-              <>
-                {shownCandidates.map((candidate) => {
-                  const isUploading = uploadingIds.has(candidate.id)
-                  const isChecked = selectedIds.has(candidate.id)
-
-                  return (
-                    <div
-                      className={`candidate candidate--selectable ${
-                        highlightId === candidate.id ? 'candidate--new' : ''
-                      } ${isChecked ? 'candidate--selected' : ''}`}
-                      key={candidate.id}
-                      onClick={() => setSelectedId(candidate.id)}
-                    >
-                      <div className="candidate__select" onClick={stop}>
-                        <input
-                          type="checkbox"
-                          checked={isChecked}
-                          onChange={() => toggleSelected(candidate.id)}
-                          aria-label={`Select ${candidate.name}`}
-                        />
-                      </div>
-
-                      <button
-                        type="button"
-                        className="candidate__name"
-                        aria-label={`Open ${candidate.name}`}
-                      >
-                        <h3>{candidate.name}</h3>
-                        <p>{candidate.email || 'Candidate profile'}</p>
-                        <CandidateTags candidate={candidate} />
-                      </button>
-
-                      <div className="candidate__role">{candidate.role}</div>
-
-                      <div className="candidate__status-cell" onClick={stop}>
-                        <select
-                          className={`candidate-status-select pill--${getStatusType(
-                            candidate.status
-                          )}`}
-                          value={candidate.status}
-                          disabled={updatingStatusId === candidate.id}
-                          onChange={(event) =>
-                            handleStatusChange(candidate, event.target.value)
+                )
+              })}
+            </div>
+          ) : (
+            <div className="jobs-table-scroll">
+              <table className="jobs-table cand-table">
+                <thead>
+                  <tr>
+                    <th className="cand-table__check">
+                      <input
+                        type="checkbox"
+                        checked={allShownSelected}
+                        ref={(element) => {
+                          if (element) {
+                            element.indeterminate = someShownSelected && !allShownSelected
                           }
-                          aria-label={`Update status for ${candidate.name}`}
-                        >
-                          {STATUSES.map((status) => (
-                            <option key={status} value={status}>
-                              {status}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
+                        }}
+                        onChange={toggleSelectAll}
+                        aria-label="Select all candidates shown"
+                      />
+                    </th>
+                    <th>Candidate</th>
+                    <th>Role</th>
+                    <th>Stage</th>
+                    <th>Added</th>
+                    <th>
+                      <span className="visually-hidden">Actions</span>
+                    </th>
+                  </tr>
+                </thead>
 
-                      <div className="candidate__actions" onClick={stop}>
-                        <div className="candidate__resume">
+                <tbody>
+                  {shownCandidates.map((candidate) => {
+                    const isUploading = uploadingIds.has(candidate.id)
+                    const isChecked = selectedIds.has(candidate.id)
+
+                    return (
+                      <tr
+                        key={candidate.id}
+                        className={`${highlightId === candidate.id ? 'candidate--new' : ''} ${
+                          isChecked ? 'candidate--selected' : ''
+                        }`}
+                      >
+                        <td className="cand-table__check">
+                          <input
+                            type="checkbox"
+                            checked={isChecked}
+                            onChange={() => toggleSelected(candidate.id)}
+                            aria-label={`Select ${candidate.name}`}
+                          />
+                        </td>
+
+                        <td data-label="Candidate">
+                          <button
+                            type="button"
+                            className="candidate__name"
+                            onClick={() => setSelectedId(candidate.id)}
+                            aria-label={`Open ${candidate.name}`}
+                          >
+                            <b className="job-title">{candidate.name}</b>
+                            <small>{candidate.email || 'Candidate profile'}</small>
+                          </button>
+                          <CandidateTags candidate={candidate} />
+                        </td>
+
+                        <td data-label="Role">{candidate.role}</td>
+
+                        <td data-label="Stage">
+                          <StageSelect
+                            candidate={candidate}
+                            busy={updatingStatusId === candidate.id}
+                            onChange={handleStatusChange}
+                          />
+                        </td>
+
+                        <td data-label="Added">{formatDate(candidate.createdMs)}</td>
+
+                        <td className="jobs-table__actions">
                           {isUploading ? (
                             <span className="candidate-resume-state candidate-resume-state--busy">
-                              Uploading resume…
+                              Uploading…
                             </span>
                           ) : candidate.resumeUrl ? (
                             <a
@@ -2162,913 +1941,704 @@ export default function Candidates() {
                               Resume
                             </a>
                           ) : (
-                            <span className="candidate-resume-state">
-                              No resume
-                            </span>
+                            <span className="candidate-resume-state">No resume</span>
                           )}
-                        </div>
 
-                        <button
-                          type="button"
-                          className="btn btn--small"
-                          onClick={() => setSelectedId(candidate.id)}
-                        >
-                          View
-                        </button>
+                          <button
+                            type="button"
+                            className="btn btn--primary btn--small"
+                            onClick={() => setSelectedId(candidate.id)}
+                          >
+                            View
+                          </button>
 
-                        <button
-                          type="button"
-                          className="candidate-icon-btn"
-                          title={`Edit ${candidate.name}`}
-                          aria-label={`Edit ${candidate.name}`}
-                          onClick={() => openEditModal(candidate)}
-                        >
-                          ✎
-                        </button>
+                          <button
+                            type="button"
+                            className="cand-icon-btn"
+                            title={`Edit ${candidate.name}`}
+                            aria-label={`Edit ${candidate.name}`}
+                            onClick={() => openEditModal(candidate)}
+                          >
+                            ✎
+                          </button>
 
-                        <button
-                          type="button"
-                          className="candidate-delete-btn"
-                          title={`Delete ${candidate.name}`}
-                          aria-label={`Delete ${candidate.name}`}
-                          onClick={() => setDeleteTargets([candidate])}
-                        >
-                          🗑
-                        </button>
-                      </div>
-                    </div>
-                  )
-                })}
+                          <button
+                            type="button"
+                            className="cand-icon-btn cand-icon-btn--danger"
+                            title={`Delete ${candidate.name}`}
+                            aria-label={`Delete ${candidate.name}`}
+                            onClick={() => setDeleteTargets([candidate])}
+                          >
+                            🗑
+                          </button>
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
 
-                {filteredCandidates.length > shownCandidates.length && (
-                  <div className="candidates__more">
-                    <button
-                      type="button"
-                      className="btn btn--small"
-                      onClick={() =>
-                        setVisibleCount((count) => count + PAGE_SIZE)
-                      }
-                    >
-                      Show more (
-                      {filteredCandidates.length - shownCandidates.length}{' '}
-                      left)
-                    </button>
-                  </div>
-                )}
-              </>
-            )}
-          </div>
-        </section>
-      </main>
-
-      {/* =====================================
-          ADD / EDIT CANDIDATE MODAL
-      ===================================== */}
-
-      {showAddModal && (
-        <div
-          className="candidate-modal-overlay"
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget) closeAddModal()
-          }}
-        >
-          <div
-            className="candidate-modal"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="candidate-add-title"
-          >
-            <div className="candidate-modal__header">
-              <div>
-                <span className="pill pill--live">
-                  <span className="dot" />
-                  {isEditing ? 'Edit profile' : 'New candidate'}
-                </span>
-
-                <h2 id="candidate-add-title">
-                  {isEditing ? 'Edit candidate' : 'Add a candidate'}
-                </h2>
-
-                <p>
-                  {isEditing
-                    ? 'Update their details or replace the resume. Their hiring stage stays the same.'
-                    : 'Start with a name, role and email. Phone, resume and notes are optional and can be added now or later.'}
-                </p>
-              </div>
-
-              <button
-                type="button"
-                className="modal-close"
-                onClick={closeAddModal}
-                disabled={saving}
-                aria-label="Close candidate form"
-              >
-                ×
-              </button>
-            </div>
-
-            <form onSubmit={handleSubmit} noValidate>
-              <div className="candidate-form-grid">
-                <div className="candidate-form-field">
-                  <label htmlFor="candidate-name">Full name *</label>
-
-                  <input
-                    ref={nameInputRef}
-                    id="candidate-name"
-                    type="text"
-                    name="name"
-                    value={form.name}
-                    onChange={updateForm}
-                    placeholder="e.g. Rahul Kumar"
-                    maxLength={100}
-                    autoComplete="off"
-                    autoFocus
-                    required
-                  />
-                </div>
-
-                <div className="candidate-form-field">
-                  <label htmlFor="candidate-role">Applying for *</label>
-
-                  <input
-                    id="candidate-role"
-                    type="text"
-                    name="role"
-                    value={form.role}
-                    onChange={updateForm}
-                    placeholder="e.g. Frontend Developer"
-                    maxLength={150}
-                    autoComplete="off"
-                    list="candidate-role-options"
-                    required
-                  />
-
-                  <datalist id="candidate-role-options">
-                    {jobTitles.map((title) => (
-                      <option key={title} value={title} />
-                    ))}
-                  </datalist>
-                </div>
-
-                <div className="candidate-form-field">
-                  <label htmlFor="candidate-email">Email address *</label>
-
-                  <input
-                    id="candidate-email"
-                    type="text"
-                    inputMode="email"
-                    name="email"
-                    value={form.email}
-                    onChange={updateForm}
-                    onFocus={() => setEmailFocused(true)}
-                    onBlur={handleEmailBlur}
-                    placeholder="just type the name, e.g. rahul.kumar"
-                    maxLength={254}
-                    autoComplete="off"
-                    autoCapitalize="none"
-                    autoCorrect="off"
-                    spellCheck={false}
-                    aria-describedby="candidate-email-hint"
-                    required
-                  />
-
-                  {emailSuggestions.length > 0 ? (
-                    <div
-                      className="email-suggest"
-                      role="listbox"
-                      aria-label="Email suggestions"
-                    >
-                      {emailSuggestions.map((suggestion) => (
-                        <button
-                          key={suggestion.value}
-                          type="button"
-                          role="option"
-                          aria-selected="false"
-                          // keep the input focused so the tap doesn't trigger blur first
-                          onMouseDown={(event) => event.preventDefault()}
-                          onClick={() => pickEmailSuggestion(suggestion.value)}
-                        >
-                          {suggestion.local}
-                          <strong>@{suggestion.domain}</strong>
-                        </button>
-                      ))}
-                    </div>
-                  ) : (
-                    <span
-                      id="candidate-email-hint"
-                      className="candidate-form-hint"
-                    >
-                      @{DEFAULT_EMAIL_DOMAIN} is added for you.
-                    </span>
-                  )}
-                </div>
-
-                <div className="candidate-form-field">
-                  <label htmlFor="candidate-phone">Phone (optional)</label>
-
-                  <input
-                    id="candidate-phone"
-                    type="tel"
-                    inputMode="tel"
-                    name="phone"
-                    value={form.phone}
-                    onChange={updateForm}
-                    placeholder="e.g. +91 98765 43210"
-                    maxLength={20}
-                    autoComplete="off"
-                  />
-                </div>
-
-                <div className="candidate-form-field candidate-form-field--full">
-                  <label htmlFor="candidate-resume">
-                    {isEditing ? 'Resume' : 'Resume (optional)'}
-                  </label>
-
-                  <div
-                    className={`resume-upload-box ${
-                      dragging ? 'resume-upload-box--drag' : ''
-                    } ${selectedFile ? 'resume-upload-box--filled' : ''}`}
-                    onDragOver={(event) => {
-                      event.preventDefault()
-                      setDragging(true)
-                    }}
-                    onDragLeave={() => setDragging(false)}
-                    onDrop={handleDrop}
+              {filteredCandidates.length > shownCandidates.length && (
+                <div className="candidates__more">
+                  <button
+                    type="button"
+                    className="btn btn--small"
+                    onClick={() => setVisibleCount((count) => count + PAGE_SIZE)}
                   >
-                    <button
-                      type="button"
-                      className="btn"
-                      onClick={() => fileInputRef.current?.click()}
-                    >
-                      {selectedFile || hasCurrentResume
-                        ? 'Change resume'
-                        : 'Choose resume'}
-                    </button>
-
-                    <span>
-                      {selectedFile
-                        ? selectedFile.name
-                        : hasCurrentResume
-                          ? `Current: ${currentResumeName || 'Resume on file'} · choose a file to replace it`
-                          : 'Drag and drop here · PDF, DOC or DOCX · up to 10 MB'}
-                    </span>
-                  </div>
-
-                  <input
-                    ref={fileInputRef}
-                    id="candidate-resume"
-                    type="file"
-                    accept=".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                    onChange={handleFileChange}
-                    aria-label="Upload candidate resume"
-                    style={{ display: 'none' }}
-                  />
-                </div>
-
-                <div className="candidate-form-field candidate-form-field--full">
-                  <label htmlFor="candidate-notes">Notes (optional)</label>
-
-                  <textarea
-                    id="candidate-notes"
-                    name="notes"
-                    value={form.notes}
-                    onChange={updateForm}
-                    placeholder="Skills, referral source, salary expectations, anything worth remembering…"
-                    rows="3"
-                    maxLength={3000}
-                  />
-                </div>
-              </div>
-
-              {formError && (
-                <div role="alert" className="candidate-form-error">
-                  {formError}
+                    Show more ({filteredCandidates.length - shownCandidates.length} left)
+                  </button>
                 </div>
               )}
+            </div>
+          )}
+        </section>
 
-              <div className="candidate-modal__actions">
-                <button
-                  type="button"
-                  className="btn"
-                  onClick={closeAddModal}
-                  disabled={saving}
+        {!loading && candidates.length > 0 && (
+          <p className="jobs-page__count">
+            {plural(filteredCandidates.length, 'candidate')}
+            {hasFilters ? ` of ${candidates.length}` : ''}
+          </p>
+        )}
+      </main>
+
+      <footer className="footer">
+        Who’s Next assists interviewers. Hiring decisions stay with you.
+      </footer>
+
+      {/* ---------- add / edit candidate ---------- */}
+
+      {showAddModal && (
+        <Modal onClose={closeAddModal} labelledBy="candidate-add-title">
+          <ModalHead
+            id="candidate-add-title"
+            title={isEditing ? 'Edit candidate' : 'Add a candidate'}
+            text={
+              isEditing
+                ? 'Update their details or replace the resume. Their hiring stage stays the same.'
+                : 'Start with a name, role and email. Phone, resume and notes are optional.'
+            }
+            onClose={closeAddModal}
+            disabled={saving}
+            closeLabel="Close candidate form"
+          />
+
+          <form onSubmit={handleSubmit} noValidate>
+            <div className="cand-form-grid">
+              <div className="field">
+                <label htmlFor="candidate-name">Full name *</label>
+                <input
+                  ref={nameInputRef}
+                  id="candidate-name"
+                  type="text"
+                  name="name"
+                  value={form.name}
+                  onChange={updateForm}
+                  placeholder="e.g. Rahul Kumar"
+                  maxLength={100}
+                  autoComplete="off"
+                  autoFocus
+                  required
+                />
+              </div>
+
+              <div className="field">
+                <label htmlFor="candidate-role">Applying for *</label>
+                <input
+                  id="candidate-role"
+                  type="text"
+                  name="role"
+                  value={form.role}
+                  onChange={updateForm}
+                  placeholder="e.g. Frontend Developer"
+                  maxLength={150}
+                  autoComplete="off"
+                  list="candidate-role-options"
+                  required
+                />
+                <datalist id="candidate-role-options">
+                  {jobTitles.map((title) => (
+                    <option key={title} value={title} />
+                  ))}
+                </datalist>
+              </div>
+
+              <div className="field">
+                <label htmlFor="candidate-email">Email address *</label>
+                <input
+                  id="candidate-email"
+                  type="text"
+                  inputMode="email"
+                  name="email"
+                  value={form.email}
+                  onChange={updateForm}
+                  onFocus={() => setEmailFocused(true)}
+                  onBlur={handleEmailBlur}
+                  placeholder="just type the name, e.g. rahul.kumar"
+                  maxLength={254}
+                  autoComplete="off"
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  spellCheck={false}
+                  aria-describedby="candidate-email-hint"
+                  required
+                />
+
+                {emailSuggestions.length > 0 ? (
+                  <div className="email-suggest" role="listbox" aria-label="Email suggestions">
+                    {emailSuggestions.map((suggestion) => (
+                      <button
+                        key={suggestion.value}
+                        type="button"
+                        role="option"
+                        aria-selected="false"
+                        // keep the input focused so the tap doesn't trigger blur first
+                        onMouseDown={(event) => event.preventDefault()}
+                        onClick={() =>
+                          setForm((previous) => ({ ...previous, email: suggestion.value }))
+                        }
+                      >
+                        {suggestion.local}
+                        <strong>@{suggestion.domain}</strong>
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <small id="candidate-email-hint" className="hint">
+                    @{DEFAULT_EMAIL_DOMAIN} is added for you.
+                  </small>
+                )}
+              </div>
+
+              <div className="field">
+                <label htmlFor="candidate-phone">Phone (optional)</label>
+                <input
+                  id="candidate-phone"
+                  type="tel"
+                  inputMode="tel"
+                  name="phone"
+                  value={form.phone}
+                  onChange={updateForm}
+                  placeholder="e.g. +91 98765 43210"
+                  maxLength={20}
+                  autoComplete="off"
+                />
+              </div>
+
+              <div className="field cand-form-grid__full">
+                <label htmlFor="candidate-resume">
+                  {isEditing ? 'Resume' : 'Resume (optional)'}
+                </label>
+
+                <div
+                  className={`resume-upload-box ${dragging ? 'resume-upload-box--drag' : ''} ${
+                    selectedFile ? 'resume-upload-box--filled' : ''
+                  }`}
+                  onDragOver={(event) => {
+                    event.preventDefault()
+                    setDragging(true)
+                  }}
+                  onDragLeave={() => setDragging(false)}
+                  onDrop={handleDrop}
                 >
-                  Cancel
-                </button>
-
-                {!isEditing && (
                   <button
                     type="button"
                     className="btn"
-                    onClick={(event) => handleSubmit(event, true)}
-                    disabled={saving}
+                    onClick={() => fileInputRef.current?.click()}
                   >
-                    Save &amp; add another
+                    {selectedFile || hasCurrentResume ? 'Change resume' : 'Choose resume'}
                   </button>
-                )}
 
-                <button
-                  type="submit"
-                  className="btn btn--primary"
-                  disabled={saving}
-                >
-                  {saving
-                    ? 'Saving…'
-                    : isEditing
-                      ? 'Save changes'
-                      : 'Save candidate'}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+                  <span>
+                    {selectedFile
+                      ? selectedFile.name
+                      : hasCurrentResume
+                        ? `Current: ${currentResumeName || 'Resume on file'} · choose a file to replace it`
+                        : 'Drag and drop here · PDF, DOC or DOCX · up to 10 MB'}
+                  </span>
+                </div>
 
-      {/* =====================================
-          VIEW CANDIDATE MODAL
-      ===================================== */}
-
-      {selectedCandidate && (
-        <div
-          className="candidate-modal-overlay"
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget) setSelectedId(null)
-          }}
-        >
-          <div
-            className="candidate-modal"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="candidate-details-title"
-          >
-            <div className="candidate-modal__header">
-              <div>
-                <span
-                  className={`pill pill--${getStatusType(
-                    selectedCandidate.status
-                  )}`}
-                >
-                  <span className="dot" />
-                  {selectedCandidate.status}
-                </span>
-
-                <h2 id="candidate-details-title">{selectedCandidate.name}</h2>
-
-                <p>
-                  {selectedCandidate.role
-                    ? `${selectedCandidate.role} · Candidate profile`
-                    : 'Candidate profile'}
-                </p>
+                <input
+                  ref={fileInputRef}
+                  id="candidate-resume"
+                  type="file"
+                  className="visually-hidden"
+                  accept=".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                  onChange={(event) => acceptFile(event.target.files?.[0] || null)}
+                  aria-label="Upload candidate resume"
+                />
               </div>
 
-              <button
-                type="button"
-                className="modal-close"
-                onClick={() => setSelectedId(null)}
-                aria-label="Close candidate details"
-              >
-                ×
-              </button>
+              <div className="field cand-form-grid__full">
+                <label htmlFor="candidate-notes">Notes (optional)</label>
+                <textarea
+                  id="candidate-notes"
+                  name="notes"
+                  value={form.notes}
+                  onChange={updateForm}
+                  placeholder="Skills, referral source, salary expectations, anything worth remembering…"
+                  rows="3"
+                  maxLength={3000}
+                />
+              </div>
             </div>
 
-            {isStale(selectedCandidate) && (
-              <div className="candidate-followup" role="note">
-                No update for {daysSince(selectedCandidate.updatedMs)} days.
-                Move them to the next stage, add feedback, or send a quick
-                email below.
+            {formError && (
+              <div role="alert" className="candidate-form-error">
+                {formError}
               </div>
             )}
 
-            <div className="candidate-details">
-              <div className="candidate-detail">
-                <span>Hiring stage</span>
-
-                <select
-                  className={`candidate-status-select pill--${getStatusType(
-                    selectedCandidate.status
-                  )}`}
-                  value={selectedCandidate.status}
-                  disabled={updatingStatusId === selectedCandidate.id}
-                  onChange={(event) =>
-                    handleStatusChange(selectedCandidate, event.target.value)
-                  }
-                  aria-label={`Update status for ${selectedCandidate.name}`}
-                >
-                  {STATUSES.map((status) => (
-                    <option key={status} value={status}>
-                      {status}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div className="candidate-detail">
-                <span>Applying for</span>
-                <strong>{selectedCandidate.role || 'Role not specified'}</strong>
-              </div>
-
-              <div className="candidate-detail">
-                <span>Email address</span>
-                <strong>
-                  {selectedCandidate.email ? (
-                    <a href={`mailto:${selectedCandidate.email}`}>
-                      {selectedCandidate.email}
-                    </a>
-                  ) : (
-                    'No email on file'
-                  )}
-                </strong>
-              </div>
-
-              <div className="candidate-detail">
-                <span>Phone</span>
-                <strong>
-                  {selectedCandidate.phone ? (
-                    <a href={`tel:${selectedCandidate.phone}`}>
-                      {selectedCandidate.phone}
-                    </a>
-                  ) : (
-                    'No phone on file'
-                  )}
-                </strong>
-              </div>
-
-              <div className="candidate-detail">
-                <span>Resume</span>
-
-                <strong>
-                  {uploadingIds.has(selectedCandidate.id) ? (
-                    'Uploading resume…'
-                  ) : selectedCandidate.resumeUrl ? (
-                    <a
-                      href={selectedCandidate.resumeUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                    >
-                      {selectedCandidate.resumeName || 'Open resume'}
-                    </a>
-                  ) : (
-                    'No resume attached yet'
-                  )}
-                </strong>
-              </div>
-
-              <div className="candidate-detail">
-                <span>Notes</span>
-
-                <strong className="candidate-notes">
-                  {selectedCandidate.notes || 'No notes added yet.'}
-                </strong>
-              </div>
-
-              <div className="candidate-detail">
-                <span>Added on</span>
-                <strong>{formatDate(selectedCandidate.createdMs)}</strong>
-              </div>
-
-              {/* ---- quick emails ---- */}
-              <div className="candidate-detail">
-                <span>Quick email</span>
-
-                {selectedCandidate.email ? (
-                  <div className="email-templates">
-                    {EMAIL_TEMPLATES.map((template) => (
-                      <a
-                        key={template.key}
-                        className="btn btn--small"
-                        href={buildMailto(
-                          selectedCandidate,
-                          template,
-                          actorName
-                        )}
-                        onClick={() =>
-                          logActivity(selectedCandidate.id, {
-                            type: 'email',
-                            text: `Email drafted: ${template.label}`,
-                          })
-                        }
-                      >
-                        {template.label}
-                      </a>
-                    ))}
-                  </div>
-                ) : (
-                  <strong>No email on file</strong>
-                )}
-              </div>
-
-              {/* ---- interview feedback ---- */}
-              <div className="candidate-detail">
-                <span>
-                  Interview feedback
-                  {selectedCandidate.ratingCount > 0 &&
-                    ` · average ${averageRating(selectedCandidate).toFixed(
-                      1
-                    )} from ${selectedCandidate.ratingCount}`}
-                </span>
-
-                <div
-                  className="rating-input"
-                  role="group"
-                  aria-label="Rate this candidate"
-                >
-                  {[1, 2, 3, 4, 5].map((value) => (
-                    <button
-                      key={value}
-                      type="button"
-                      className={value <= feedbackRating ? 'is-on' : ''}
-                      aria-pressed={feedbackRating === value}
-                      aria-label={`${value} star${value === 1 ? '' : 's'}`}
-                      onClick={() =>
-                        setFeedbackRating(feedbackRating === value ? 0 : value)
-                      }
-                    >
-                      ★
-                    </button>
-                  ))}
-                </div>
-
-                <textarea
-                  className="feedback-input"
-                  value={feedbackText}
-                  onChange={(event) => setFeedbackText(event.target.value)}
-                  placeholder="What stood out in the interview? Strengths, concerns, next steps…"
-                  rows="2"
-                  maxLength={1000}
-                  aria-label="Interview feedback"
-                />
-
-                <button
-                  type="button"
-                  className="btn btn--small feedback-save"
-                  onClick={handleSaveFeedback}
-                  disabled={savingFeedback}
-                >
-                  {savingFeedback ? 'Saving…' : 'Save feedback'}
-                </button>
-              </div>
-
-              {/* ---- history ---- */}
-              <div className="candidate-detail">
-                <span>History</span>
-
-                {activity.length === 0 ? (
-                  <strong className="candidate-notes">
-                    Changes and feedback will appear here.
-                  </strong>
-                ) : (
-                  <ol className="timeline">
-                    {activity.map((item) => (
-                      <li
-                        key={item.id}
-                        className={`timeline__item timeline__item--${item.type}`}
-                      >
-                        <span className="timeline__dot" aria-hidden="true" />
-
-                        <div>
-                          <p>
-                            {item.type === 'feedback' && (
-                              <span className="timeline__stars">
-                                {stars(item.rating)}{' '}
-                              </span>
-                            )}
-                            {item.text ||
-                              (item.type === 'feedback' ? 'Rated' : '')}
-                          </p>
-                          <small>
-                            {item.by ? `${item.by} · ` : ''}
-                            {formatDateTime(item.ms)}
-                          </small>
-                        </div>
-                      </li>
-                    ))}
-                  </ol>
-                )}
-              </div>
-            </div>
-
-            <div className="candidate-modal__actions candidate-modal__actions--split">
-              <button
-                type="button"
-                className="btn btn--danger"
-                onClick={() => setDeleteTargets([selectedCandidate])}
-              >
-                Delete candidate
+            <div className="modal__actions">
+              <button type="button" className="btn" onClick={closeAddModal} disabled={saving}>
+                Cancel
               </button>
 
-              <div className="candidate-modal__actions-group">
+              {!isEditing && (
                 <button
                   type="button"
                   className="btn"
-                  onClick={() => openEditModal(selectedCandidate)}
+                  onClick={(event) => handleSubmit(event, true)}
+                  disabled={saving}
                 >
-                  Edit
+                  Save &amp; add another
                 </button>
+              )}
 
+              <button type="submit" className="btn btn--primary" disabled={saving}>
+                {saving ? 'Saving…' : isEditing ? 'Save changes' : 'Save candidate'}
+              </button>
+            </div>
+          </form>
+        </Modal>
+      )}
+
+      {/* ---------- candidate profile ---------- */}
+
+      {selectedCandidate && (
+        <Modal onClose={() => setSelectedId(null)} labelledBy="candidate-details-title">
+          <ModalHead
+            id="candidate-details-title"
+            badge={<StatusBadge status={selectedCandidate.status} />}
+            title={selectedCandidate.name}
+            text={
+              selectedCandidate.role
+                ? `${selectedCandidate.role} · Candidate profile`
+                : 'Candidate profile'
+            }
+            onClose={() => setSelectedId(null)}
+            closeLabel="Close candidate details"
+          />
+
+          {isStale(selectedCandidate) && (
+            <div className="candidate-followup" role="note">
+              No update for {daysSince(selectedCandidate.updatedMs)} days. Move them to the next
+              stage, add feedback, or send a quick email below.
+            </div>
+          )}
+
+          <div className="candidate-details">
+            <Detail label="Hiring stage">
+              <StageSelect
+                candidate={selectedCandidate}
+                busy={updatingStatusId === selectedCandidate.id}
+                onChange={handleStatusChange}
+              />
+            </Detail>
+
+            <Detail label="Applying for">
+              <strong>{selectedCandidate.role || 'Role not specified'}</strong>
+            </Detail>
+
+            <Detail label="Email address">
+              <strong>
+                {selectedCandidate.email ? (
+                  <a href={`mailto:${selectedCandidate.email}`}>{selectedCandidate.email}</a>
+                ) : (
+                  'No email on file'
+                )}
+              </strong>
+            </Detail>
+
+            <Detail label="Phone">
+              <strong>
+                {selectedCandidate.phone ? (
+                  <a href={`tel:${selectedCandidate.phone}`}>{selectedCandidate.phone}</a>
+                ) : (
+                  'No phone on file'
+                )}
+              </strong>
+            </Detail>
+
+            <Detail label="Resume">
+              <strong>
+                {uploadingIds.has(selectedCandidate.id) ? (
+                  'Uploading resume…'
+                ) : selectedCandidate.resumeUrl ? (
+                  <a href={selectedCandidate.resumeUrl} target="_blank" rel="noopener noreferrer">
+                    {selectedCandidate.resumeName || 'Open resume'}
+                  </a>
+                ) : (
+                  'No resume attached yet'
+                )}
+              </strong>
+            </Detail>
+
+            <Detail label="Notes">
+              <strong className="candidate-notes">
+                {selectedCandidate.notes || 'No notes added yet.'}
+              </strong>
+            </Detail>
+
+            <Detail label="Added on">
+              <strong>{formatDate(selectedCandidate.createdMs)}</strong>
+            </Detail>
+
+            <Detail label="Quick email">
+              {selectedCandidate.email ? (
+                <div className="email-templates">
+                  {EMAIL_TEMPLATES.map((template) => (
+                    <a
+                      key={template.key}
+                      className="btn btn--small"
+                      href={buildMailto(selectedCandidate, template, actorName)}
+                      onClick={() =>
+                        logActivity(
+                          selectedCandidate.id,
+                          'email',
+                          `Email drafted: ${template.label}`
+                        )
+                      }
+                    >
+                      {template.label}
+                    </a>
+                  ))}
+                </div>
+              ) : (
+                <strong>No email on file</strong>
+              )}
+            </Detail>
+
+            <Detail
+              label={`Interview feedback${
+                selectedCandidate.ratingCount > 0
+                  ? ` · average ${averageRating(selectedCandidate).toFixed(1)} from ${
+                      selectedCandidate.ratingCount
+                    }`
+                  : ''
+              }`}
+            >
+              <div className="rating-input" role="group" aria-label="Rate this candidate">
+                {[1, 2, 3, 4, 5].map((value) => (
+                  <button
+                    key={value}
+                    type="button"
+                    className={value <= feedbackRating ? 'is-on' : ''}
+                    aria-pressed={feedbackRating === value}
+                    aria-label={`${plural(value, 'star')}`}
+                    onClick={() => setFeedbackRating(feedbackRating === value ? 0 : value)}
+                  >
+                    ★
+                  </button>
+                ))}
+              </div>
+
+              <textarea
+                className="feedback-input"
+                value={feedbackText}
+                onChange={(event) => setFeedbackText(event.target.value)}
+                placeholder="What stood out in the interview? Strengths, concerns, next steps…"
+                rows="2"
+                maxLength={1000}
+                aria-label="Interview feedback"
+              />
+
+              <button
+                type="button"
+                className="btn btn--small feedback-save"
+                onClick={handleSaveFeedback}
+                disabled={savingFeedback}
+              >
+                {savingFeedback ? 'Saving…' : 'Save feedback'}
+              </button>
+            </Detail>
+
+            <Detail label="History">
+              {activity.length === 0 ? (
+                <strong className="candidate-notes">Changes and feedback will appear here.</strong>
+              ) : (
+                <ol className="timeline">
+                  {activity.map((item) => (
+                    <li
+                      key={item.id}
+                      className={`timeline__item timeline__item--${item.type}`}
+                    >
+                      <span className="timeline__dot" aria-hidden="true" />
+
+                      <div>
+                        <p>
+                          {item.type === 'feedback' && (
+                            <span className="timeline__stars">{stars(item.rating)} </span>
+                          )}
+                          {item.text || (item.type === 'feedback' ? 'Rated' : '')}
+                        </p>
+                        <small>
+                          {item.by ? `${item.by} · ` : ''}
+                          {formatDateTime(item.ms)}
+                        </small>
+                      </div>
+                    </li>
+                  ))}
+                </ol>
+              )}
+            </Detail>
+          </div>
+
+          <div className="modal__actions modal__actions--split">
+            <button
+              type="button"
+              className="btn btn--danger"
+              onClick={() => setDeleteTargets([selectedCandidate])}
+            >
+              Delete candidate
+            </button>
+
+            <div className="cand-actions-group">
+              <button type="button" className="btn" onClick={() => openEditModal(selectedCandidate)}>
+                Edit
+              </button>
+              <button type="button" className="btn btn--primary" onClick={() => setSelectedId(null)}>
+                Done
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* ---------- delete confirmation ---------- */}
+
+      {deleteTargets.length > 0 && (
+        <Modal
+          small
+          role="alertdialog"
+          onClose={() => !deleting && setDeleteTargets([])}
+          labelledBy="candidate-delete-title"
+          describedBy="candidate-delete-text"
+        >
+          <DialogIcon tone="danger">🗑</DialogIcon>
+
+          <h3 id="candidate-delete-title" className="cand-dialog__title">
+            {deleteIsMany
+              ? `Remove ${deleteTargets.length} candidates?`
+              : 'Remove this candidate?'}
+          </h3>
+
+          <div className="dialog-person">
+            <span className="dialog-person__avatar" aria-hidden="true">
+              {deleteIsMany ? deleteTargets.length : getInitials(deleteTargets[0].name)}
+            </span>
+
+            <div className="dialog-person__info">
+              {deleteIsMany ? (
+                <>
+                  <b>
+                    {deleteTargets
+                      .slice(0, 3)
+                      .map((candidate) => candidate.name)
+                      .join(', ')}
+                    {deleteTargets.length > 3 ? ` and ${deleteTargets.length - 3} more` : ''}
+                  </b>
+                  <span>Selected candidates</span>
+                </>
+              ) : (
+                <>
+                  <b>{deleteTargets[0].name}</b>
+                  <span>
+                    {[deleteTargets[0].role, deleteTargets[0].status].filter(Boolean).join(' · ')}
+                  </span>
+                </>
+              )}
+            </div>
+          </div>
+
+          <p id="candidate-delete-text" className="cand-dialog__text">
+            {deleteIsMany
+              ? 'Their profiles, notes and resumes will be taken off your list.'
+              : 'Their profile, notes and resume will be taken off your list.'}{' '}
+            Changed your mind? You can undo for a few seconds right after.
+          </p>
+
+          <div className="modal__actions">
+            <button
+              type="button"
+              className="btn"
+              onClick={() => setDeleteTargets([])}
+              disabled={deleting}
+              autoFocus
+            >
+              {deleteIsMany ? 'Keep them' : 'Keep candidate'}
+            </button>
+
+            <button
+              type="button"
+              className="btn btn--danger btn--danger-solid"
+              onClick={handleDeleteCandidates}
+              disabled={deleting}
+            >
+              {deleting ? 'Removing…' : 'Yes, remove'}
+            </button>
+          </div>
+        </Modal>
+      )}
+
+      {/* ---------- success / import / error ---------- */}
+
+      {notice && (
+        <Modal
+          small
+          role="alertdialog"
+          onClose={() => setNotice(null)}
+          labelledBy="candidate-notice-title"
+        >
+          {notice.type === 'added' && (
+            <>
+              <DialogIcon tone="success">✓</DialogIcon>
+              <h3 id="candidate-notice-title" className="cand-dialog__title">
+                Candidate added
+              </h3>
+              <p className="cand-dialog__text">
+                <strong>{notice.name}</strong> is now in your pipeline and ready for screening.
+              </p>
+
+              <dl className="notice-summary">
+                <div>
+                  <dt>Applying for</dt>
+                  <dd>{notice.role}</dd>
+                </div>
+                <div>
+                  <dt>Email</dt>
+                  <dd>{notice.email}</dd>
+                </div>
+                <div>
+                  <dt>Stage</dt>
+                  <dd>Screening</dd>
+                </div>
+                <div>
+                  <dt>Resume</dt>
+                  <dd>
+                    {notice.resumeName ? `${notice.resumeName} · uploading` : 'Not attached yet'}
+                  </dd>
+                </div>
+              </dl>
+
+              <div className="notice-actions">
                 <button
                   type="button"
                   className="btn btn--primary"
-                  onClick={() => setSelectedId(null)}
+                  onClick={() => setNotice(null)}
+                  autoFocus
+                >
+                  Done
+                </button>
+
+                <div className="notice-actions__row">
+                  <button
+                    type="button"
+                    className="btn"
+                    onClick={() => {
+                      setNotice(null)
+                      setSelectedId(notice.candidateId)
+                    }}
+                  >
+                    View profile
+                  </button>
+                  <button
+                    type="button"
+                    className="btn"
+                    onClick={() => {
+                      setNotice(null)
+                      openAddModal()
+                    }}
+                  >
+                    Add another
+                  </button>
+                </div>
+              </div>
+            </>
+          )}
+
+          {notice.type === 'import' && (
+            <>
+              <DialogIcon tone={notice.added > 0 ? 'success' : 'danger'}>
+                {notice.added > 0 ? '✓' : '!'}
+              </DialogIcon>
+              <h3 id="candidate-notice-title" className="cand-dialog__title">
+                {notice.added > 0 ? 'Import finished' : 'Nothing imported'}
+              </h3>
+              <p className="cand-dialog__text">
+                {notice.added > 0
+                  ? `${plural(notice.added, 'new candidate')} ${
+                      notice.added === 1 ? 'was' : 'were'
+                    } added at the Screening stage.`
+                  : 'No new candidates were found in that file.'}
+              </p>
+
+              <dl className="notice-summary">
+                <div>
+                  <dt>Added</dt>
+                  <dd>{notice.added}</dd>
+                </div>
+                <div>
+                  <dt>Already on your list</dt>
+                  <dd>{notice.skippedDuplicate}</dd>
+                </div>
+                <div>
+                  <dt>Skipped (missing name or bad email)</dt>
+                  <dd>{notice.skippedInvalid}</dd>
+                </div>
+              </dl>
+
+              <div className="modal__actions">
+                <button
+                  type="button"
+                  className="btn btn--primary"
+                  onClick={() => setNotice(null)}
+                  autoFocus
                 >
                   Done
                 </button>
               </div>
-            </div>
-          </div>
-        </div>
-      )}
+            </>
+          )}
 
-      {/* =====================================
-          DELETE CONFIRMATION DIALOG
-      ===================================== */}
+          {notice.type === 'error' && (
+            <>
+              <DialogIcon tone="danger">!</DialogIcon>
+              <h3 id="candidate-notice-title" className="cand-dialog__title">
+                {notice.title}
+              </h3>
+              <p className="cand-dialog__text">{notice.message}</p>
 
-      {deleteTargets.length > 0 && (
-        <div
-          className="candidate-modal-overlay candidate-modal-overlay--top"
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget && !deleting) {
-              setDeleteTargets([])
-            }
-          }}
-        >
-          <div
-            className="candidate-modal candidate-modal--small"
-            role="alertdialog"
-            aria-modal="true"
-            aria-labelledby="candidate-delete-title"
-            aria-describedby="candidate-delete-text"
-          >
-            <div
-              className="candidate-dialog-icon candidate-dialog-icon--danger"
-              aria-hidden="true"
-            >
-              🗑
-            </div>
-
-            <h2 id="candidate-delete-title" className="candidate-notice__title">
-              {deleteIsMany
-                ? `Remove ${deleteTargets.length} candidates?`
-                : 'Remove this candidate?'}
-            </h2>
-
-            <div className="dialog-person">
-              <span className="dialog-person__avatar" aria-hidden="true">
-                {deleteIsMany
-                  ? deleteTargets.length
-                  : getInitials(deleteTargets[0].name)}
-              </span>
-
-              <div className="dialog-person__info">
-                {deleteIsMany ? (
-                  <>
-                    <b>
-                      {deleteTargets
-                        .slice(0, 3)
-                        .map((candidate) => candidate.name)
-                        .join(', ')}
-                      {deleteTargets.length > 3
-                        ? ` and ${deleteTargets.length - 3} more`
-                        : ''}
-                    </b>
-                    <span>Selected candidates</span>
-                  </>
-                ) : (
-                  <>
-                    <b>{deleteTargets[0].name}</b>
-                    <span>
-                      {[deleteTargets[0].role, deleteTargets[0].status]
-                        .filter(Boolean)
-                        .join(' · ')}
-                    </span>
-                  </>
-                )}
+              <div className="modal__actions">
+                <button
+                  type="button"
+                  className="btn btn--primary"
+                  onClick={() => setNotice(null)}
+                  autoFocus
+                >
+                  Got it
+                </button>
               </div>
-            </div>
-
-            <p id="candidate-delete-text" className="candidate-modal__text">
-              {deleteIsMany
-                ? 'Their profiles, notes and resumes will be taken off your list.'
-                : 'Their profile, notes and resume will be taken off your list.'}{' '}
-              Changed your mind? You can undo for a few seconds right after.
-            </p>
-
-            <div className="candidate-modal__actions">
-              <button
-                type="button"
-                className="btn"
-                onClick={() => setDeleteTargets([])}
-                disabled={deleting}
-                autoFocus
-              >
-                {deleteIsMany ? 'Keep them' : 'Keep candidate'}
-              </button>
-
-              <button
-                type="button"
-                className="btn btn--danger btn--danger-solid"
-                onClick={handleDeleteCandidates}
-                disabled={deleting}
-              >
-                {deleting ? 'Removing…' : 'Yes, remove'}
-              </button>
-            </div>
-          </div>
-        </div>
+            </>
+          )}
+        </Modal>
       )}
 
-      {/* =====================================
-          SUCCESS / IMPORT / ERROR DIALOG
-      ===================================== */}
-
-      {notice && (
-        <div
-          className="candidate-modal-overlay candidate-modal-overlay--notice"
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget) setNotice(null)
-          }}
-        >
-          <div
-            className="candidate-modal candidate-modal--small"
-            role="alertdialog"
-            aria-modal="true"
-            aria-labelledby="candidate-notice-title"
-          >
-            {notice.type === 'added' ? (
-              <>
-                <div
-                  className="candidate-dialog-icon candidate-dialog-icon--success"
-                  aria-hidden="true"
-                >
-                  ✓
-                </div>
-
-                <h2
-                  id="candidate-notice-title"
-                  className="candidate-notice__title"
-                >
-                  Candidate added
-                </h2>
-
-                <p className="candidate-modal__text">
-                  <strong>{notice.name}</strong> is now in your pipeline and
-                  ready for screening.
-                </p>
-
-                <dl className="notice-summary">
-                  <div>
-                    <dt>Applying for</dt>
-                    <dd>{notice.role}</dd>
-                  </div>
-                  <div>
-                    <dt>Email</dt>
-                    <dd>{notice.email}</dd>
-                  </div>
-                  <div>
-                    <dt>Stage</dt>
-                    <dd>Screening</dd>
-                  </div>
-                  <div>
-                    <dt>Resume</dt>
-                    <dd>
-                      {notice.resumeName
-                        ? `${notice.resumeName} · uploading`
-                        : 'Not attached yet'}
-                    </dd>
-                  </div>
-                </dl>
-
-                <div className="notice-actions">
-                  <button
-                    type="button"
-                    className="btn btn--primary"
-                    onClick={() => setNotice(null)}
-                    autoFocus
-                  >
-                    Done
-                  </button>
-
-                  <div className="notice-actions__row">
-                    <button
-                      type="button"
-                      className="btn"
-                      onClick={() => {
-                        setNotice(null)
-                        setSelectedId(notice.candidateId)
-                      }}
-                    >
-                      View profile
-                    </button>
-
-                    <button
-                      type="button"
-                      className="btn"
-                      onClick={() => {
-                        setNotice(null)
-                        openAddModal()
-                      }}
-                    >
-                      Add another
-                    </button>
-                  </div>
-                </div>
-              </>
-            ) : notice.type === 'import' ? (
-              <>
-                <div
-                  className={`candidate-dialog-icon ${
-                    notice.added > 0
-                      ? 'candidate-dialog-icon--success'
-                      : 'candidate-dialog-icon--danger'
-                  }`}
-                  aria-hidden="true"
-                >
-                  {notice.added > 0 ? '✓' : '!'}
-                </div>
-
-                <h2
-                  id="candidate-notice-title"
-                  className="candidate-notice__title"
-                >
-                  {notice.added > 0 ? 'Import finished' : 'Nothing imported'}
-                </h2>
-
-                <p className="candidate-modal__text">
-                  {notice.added > 0
-                    ? `${notice.added} new candidate${
-                        notice.added === 1 ? ' was' : 's were'
-                      } added at the Screening stage.`
-                    : 'No new candidates were found in that file.'}
-                </p>
-
-                <dl className="notice-summary">
-                  <div>
-                    <dt>Added</dt>
-                    <dd>{notice.added}</dd>
-                  </div>
-                  <div>
-                    <dt>Already on your list</dt>
-                    <dd>{notice.skippedDuplicate}</dd>
-                  </div>
-                  <div>
-                    <dt>Skipped (missing name or bad email)</dt>
-                    <dd>{notice.skippedInvalid}</dd>
-                  </div>
-                </dl>
-
-                <div className="candidate-modal__actions">
-                  <button
-                    type="button"
-                    className="btn btn--primary"
-                    onClick={() => setNotice(null)}
-                    autoFocus
-                  >
-                    Done
-                  </button>
-                </div>
-              </>
-            ) : (
-              <>
-                <div
-                  className="candidate-dialog-icon candidate-dialog-icon--danger"
-                  aria-hidden="true"
-                >
-                  !
-                </div>
-
-                <h2
-                  id="candidate-notice-title"
-                  className="candidate-notice__title"
-                >
-                  {notice.title}
-                </h2>
-
-                <p className="candidate-modal__text">{notice.message}</p>
-
-                <div className="candidate-modal__actions">
-                  <button
-                    type="button"
-                    className="btn btn--primary"
-                    onClick={() => setNotice(null)}
-                    autoFocus
-                  >
-                    Got it
-                  </button>
-                </div>
-              </>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* =====================================
-          TOASTS
-      ===================================== */}
+      {/* ---------- toasts ---------- */}
 
       <div className="toast-stack" role="status" aria-live="polite">
         {toasts.map((toast) => (
           <div className={`toast toast--${toast.type}`} key={toast.id}>
             <span className="toast__dot" />
-
             <span className="toast__text">{toast.message}</span>
 
             {toast.actionLabel && (
@@ -3090,15 +2660,11 @@ export default function Candidates() {
               onClick={() => dismissToast(toast.id)}
               aria-label="Dismiss"
             >
-              ×
+              
             </button>
           </div>
         ))}
       </div>
-
-      <footer className="footer">
-        Sift assists interviewers. Hiring decisions stay with you.
-      </footer>
     </div>
   )
 }

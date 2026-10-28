@@ -1,7 +1,9 @@
 /* =====================================================
-   Candidates page: polished visual layer
-   Same class names as before. Drop-in replacement.
-   Only appearance changed; no behavior depends on this.
+   Candidates page
+   Built on the Jobs page: it reuses the shared classes
+   (jobs-page, jobs-table, modal, field, icon-btn, hint…)
+   so only candidate-specific pieces live here.
+   Every block appears once.
 ===================================================== */
 
 :root {
@@ -9,172 +11,45 @@
   --cand-ease: cubic-bezier(.2, .8, .2, 1);
 }
 
-/* ================================
-   Candidates list
-================================ */
-
-.candidates {
-  padding: 10px;
-  overflow: hidden;
-  border-radius: var(--radius-lg);
-}
-
-.candidate__header,
-.candidate,
-.candidate-skeleton {
-  display: grid;
-  grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr) 200px 270px;
-  gap: 18px;
-  align-items: center;
-}
-
-.candidate__header {
-  padding: 12px 18px;
-  margin: 0 0 4px;
-  color: var(--ink-3);
-  font-size: 11px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  border-bottom: 1px solid var(--glass-line);
-}
-
-.candidate {
-  position: relative;
-  padding: 14px 18px;
-  border-radius: var(--radius-md);
-  cursor: pointer;
-  transition: background .18s var(--cand-ease), transform .18s var(--cand-ease),
-    box-shadow .18s var(--cand-ease);
-}
-
-/* accent bar that slides in on hover */
-.candidate::before {
-  content: '';
-  position: absolute;
-  left: 0;
-  top: 18%;
-  bottom: 18%;
-  width: 3px;
-  border-radius: 3px;
-  background: rgb(var(--cand-accent));
-  opacity: 0;
-  transform: scaleY(.4);
-  transition: opacity .18s var(--cand-ease), transform .18s var(--cand-ease);
-}
-
-.candidate:hover {
-  background: linear-gradient(90deg, rgba(var(--cand-accent), 0.07), var(--glass) 40%);
-}
-
-.candidate:hover::before {
-  opacity: 1;
-  transform: scaleY(1);
-}
-
-.candidate + .candidate {
-  border-top: 1px solid var(--glass-line);
-}
-
-.candidate:hover + .candidate,
-.candidate:hover {
-  border-top-color: transparent;
-}
-
-.candidate--new {
-  animation: candidate-in 1.4s ease-out;
-}
-
-@keyframes candidate-in {
-  0%   { background: rgba(var(--cand-accent), 0.22); box-shadow: inset 0 0 0 1px rgba(var(--cand-accent), 0.5); }
-  100% { background: transparent; box-shadow: inset 0 0 0 1px transparent; }
-}
-
-/* Name is a real button so keyboard users can open the profile */
-.candidate__name {
-  display: block;
-  max-width: 100%;
-  padding: 0;
-  border: 0;
-  background: none;
-  color: var(--ink);
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-
-.candidate__name h3 {
-  margin: 0 0 3px;
-  font-size: 15px;
-  font-weight: 650;
-  letter-spacing: -0.005em;
-  overflow-wrap: anywhere;
-  transition: color .15s;
-}
-
-.candidate:hover .candidate__name h3 {
-  color: #fff;
-}
-
-.candidate__name p {
-  margin: 0;
-  color: var(--ink-3);
-  font-size: 12px;
-  overflow-wrap: anywhere;
-}
-
-.candidate__name:focus-visible,
-.candidate-chip:focus-visible,
-.candidate-delete-btn:focus-visible,
-.modal-close:focus-visible,
-.toast__action:focus-visible,
-.toast__close:focus-visible,
-.candidate-status-select:focus-visible {
-  outline: 2px solid rgba(var(--cand-accent), 0.7);
-  outline-offset: 2px;
-}
-
-.candidate__role {
-  color: var(--ink-2);
-  font-size: 13px;
-  overflow-wrap: anywhere;
-}
-
-.btn--small {
-  padding: 8px 14px;
-  font-size: 12px;
-  font-weight: 600;
-  border-radius: 999px;
-  transition: background .15s, transform .15s var(--cand-ease), border-color .15s;
-}
-
-.btn--small:hover:not(:disabled) {
-  transform: translateY(-1px);
-}
-
-.btn--small:active:not(:disabled) {
-  transform: translateY(0);
-}
-
-.btn--small[aria-disabled="true"] {
-  opacity: 0.55;
-  pointer-events: none;
-}
-
 
 /* ================================
-   Toolbar: search
+   Page head + panel
 ================================ */
 
-.candidate-toolbar {
+.cand-head__actions {
   display: flex;
   align-items: center;
   gap: 10px;
   flex-wrap: wrap;
 }
 
+.cand-panel {
+  padding-top: 18px;
+}
+
+.cand-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 0 18px 14px;
+}
+
+.candidates__more {
+  display: flex;
+  justify-content: center;
+  padding: 16px 0 10px;
+}
+
+
+/* ================================
+   Search, sort, view toggle
+================================ */
+
 .candidate-search {
   position: relative;
+  flex: 1 1 260px;
+  max-width: 360px;
 }
 
 .candidate-search::before {
@@ -192,7 +67,7 @@
 }
 
 .candidate-search input {
-  width: 260px;
+  width: 100%;
   box-sizing: border-box;
   padding: 10px 40px 10px 36px;
 
@@ -205,7 +80,7 @@
   outline: none;
   font: inherit;
   font-size: 13px;
-  transition: border-color .18s, box-shadow .18s, background .18s, width .25s var(--cand-ease);
+  transition: border-color .18s, box-shadow .18s, background .18s;
 }
 
 .candidate-search input::placeholder {
@@ -213,7 +88,6 @@
 }
 
 .candidate-search input:focus {
-  width: 300px;
   background: rgba(255, 255, 255, 0.09);
   border-color: rgba(var(--cand-accent), 0.55);
   box-shadow: 0 0 0 3px rgba(var(--cand-accent), 0.12);
@@ -236,6 +110,85 @@
   pointer-events: none;
 }
 
+/* Shared look for every pill-shaped dropdown on this page */
+.candidate-sort,
+.candidate-status-select {
+  box-sizing: border-box;
+  border: 1px solid var(--glass-line);
+  border-radius: 999px;
+
+  background-color: rgba(255, 255, 255, 0.06);
+  background-repeat: no-repeat;
+  background-position: right 13px center;
+  background-size: 10px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8' fill='none' stroke='white' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M1 1.5l5 5 5-5'/%3E%3C/svg%3E");
+  color: var(--ink);
+
+  -webkit-appearance: none;
+  appearance: none;
+  outline: none;
+  font: inherit;
+  cursor: pointer;
+
+  transition: border-color .18s, box-shadow .18s, background-color .18s, transform .18s var(--cand-ease);
+}
+
+.candidate-sort option,
+.candidate-status-select option {
+  background: #0c2337;
+  color: #ffffff;
+}
+
+.candidate-sort {
+  padding: 10px 34px 10px 14px;
+  font-size: 13px;
+}
+
+.candidate-sort:hover {
+  background-color: rgba(255, 255, 255, 0.09);
+}
+
+.candidate-sort:focus {
+  border-color: rgba(var(--cand-accent), 0.55);
+  box-shadow: 0 0 0 3px rgba(var(--cand-accent), 0.12);
+}
+
+.candidate-view-toggle {
+  display: inline-flex;
+  padding: 3px;
+
+  border: 1px solid var(--glass-line);
+  border-radius: 999px;
+
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.candidate-view-toggle button {
+  padding: 7px 14px;
+
+  border: 0;
+  border-radius: 999px;
+
+  background: transparent;
+  color: var(--ink-2);
+
+  font: inherit;
+  font-size: 12px;
+  font-weight: 650;
+  cursor: pointer;
+
+  transition: background .15s, color .15s;
+}
+
+.candidate-view-toggle button:hover {
+  color: var(--ink);
+}
+
+.candidate-view-toggle button.is-active {
+  background: rgba(var(--cand-accent), 0.22);
+  color: #d5fff0;
+}
+
 
 /* ================================
    Status filter chips
@@ -244,7 +197,7 @@
 .candidate-chips {
   display: flex;
   gap: 8px;
-  padding: 6px 8px 14px;
+  padding: 0 18px 14px;
   overflow-x: auto;
   scrollbar-width: none;
 }
@@ -305,39 +258,101 @@
 
 
 /* ================================
-   Status dropdown (inline in row)
+   Bulk actions
 ================================ */
 
-.candidate__status-cell {
-  min-width: 0;
+.bulk-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+
+  margin: 0 18px 12px;
+  padding: 10px 14px;
+
+  border: 1px solid rgba(var(--cand-accent), 0.4);
+  border-radius: var(--radius-md);
+
+  background: linear-gradient(135deg, rgba(var(--cand-accent), 0.16), rgba(var(--cand-accent), 0.06));
+  animation: toast-in .2s var(--cand-ease);
+}
+
+.bulk-bar > b {
+  margin-right: auto;
+  color: #d5fff0;
+  font-size: 13px;
+}
+
+.bulk-bar__select {
+  padding-top: 8px;
+  padding-bottom: 8px;
+  font-size: 12px;
+}
+
+
+/* ================================
+   Table (extends .jobs-table)
+================================ */
+
+.cand-table .cand-table__check {
+  width: 44px;
+  text-align: center;
+}
+
+.cand-table input[type='checkbox'] {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: rgb(var(--cand-accent));
+  cursor: pointer;
+}
+
+.cand-table tbody tr {
+  transition: background .18s var(--cand-ease);
+}
+
+.cand-table tbody tr.candidate--selected {
+  background: linear-gradient(90deg, rgba(var(--cand-accent), 0.1), transparent 70%);
+}
+
+/* name is a real button so keyboard users can open the profile */
+.candidate__name {
+  display: block;
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+
+.candidate__name small {
+  display: block;
+}
+
+.candidate__name:hover .job-title {
+  color: #8ae9c9;
+}
+
+.candidate--new {
+  animation: candidate-in 1.4s ease-out;
+}
+
+@keyframes candidate-in {
+  0%   { background: rgba(var(--cand-accent), 0.22); box-shadow: inset 0 0 0 1px rgba(var(--cand-accent), 0.5); }
+  100% { background: transparent; box-shadow: inset 0 0 0 1px transparent; }
 }
 
 .candidate-status-select {
   width: 100%;
   max-width: 190px;
-  box-sizing: border-box;
-
-  padding: 8px 32px 8px 14px;
-
-  border: 1px solid var(--glass-line);
-  border-radius: 999px;
-
-  background-color: rgba(255, 255, 255, 0.05);
-  background-repeat: no-repeat;
+  padding: 7px 30px 7px 14px;
   background-position: right 12px center;
-  background-size: 10px;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8' fill='none' stroke='white' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M1 1.5l5 5 5-5'/%3E%3C/svg%3E");
-  color: var(--ink);
-
-  -webkit-appearance: none;
-  appearance: none;
-  outline: none;
-  font: inherit;
   font-size: 12px;
   font-weight: 650;
-
-  cursor: pointer;
-  transition: background-color .18s, border-color .18s, box-shadow .18s, transform .18s var(--cand-ease);
 }
 
 .candidate-status-select:hover:not(:disabled) {
@@ -347,11 +362,6 @@
 .candidate-status-select:disabled {
   opacity: 0.6;
   cursor: wait;
-}
-
-.candidate-status-select option {
-  background: #0c2337;
-  color: #ffffff;
 }
 
 .candidate-status-select.pill--live {
@@ -378,42 +388,7 @@
   background-color: rgba(255, 100, 100, 0.12);
 }
 
-.candidate-status-select:focus {
-  box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.08);
-}
-
-/* Filter select used inside the details modal */
-.candidate-detail .candidate-status-select {
-  max-width: 240px;
-}
-
-
-/* ================================
-   Row actions
-================================ */
-
-.candidate__actions {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-}
-
-/* Fixed slot so View and Delete line up in every row */
-.candidate__resume {
-  width: 104px;
-  flex-shrink: 0;
-}
-
-.candidate__resume .btn {
-  display: flex;
-  justify-content: center;
-  width: 100%;
-  box-sizing: border-box;
-}
-
 .candidate-resume-state {
-  display: block;
-  text-align: center;
   color: var(--ink-3);
   font-size: 12px;
   white-space: nowrap;
@@ -428,7 +403,8 @@
   50% { opacity: 0.45; }
 }
 
-.candidate-delete-btn {
+/* round icon buttons (edit + delete) */
+.cand-icon-btn {
   width: 34px;
   height: 34px;
 
@@ -438,27 +414,35 @@
 
   padding: 0;
 
-  border: 1px solid rgba(255, 100, 100, 0.3);
+  border: 1px solid var(--glass-line);
   border-radius: 50%;
 
   background: transparent;
-  color: #ff8f8f;
+  color: var(--ink-2);
 
   font-size: 14px;
   line-height: 1;
   cursor: pointer;
 
-  transition: background .15s, border-color .15s, transform .15s var(--cand-ease);
+  transition: background .15s, border-color .15s, color .15s, transform .15s var(--cand-ease);
 }
 
-.candidate-delete-btn:hover {
-  background: rgba(255, 100, 100, 0.14);
-  border-color: rgba(255, 100, 100, 0.6);
+.cand-icon-btn:hover {
+  background: rgba(var(--cand-accent), 0.12);
+  border-color: rgba(var(--cand-accent), 0.5);
+  color: #8ae9c9;
   transform: translateY(-1px);
 }
 
-.candidate-delete-btn:active {
-  transform: translateY(0);
+.cand-icon-btn--danger {
+  border-color: rgba(255, 100, 100, 0.3);
+  color: #ff8f8f;
+}
+
+.cand-icon-btn--danger:hover {
+  background: rgba(255, 100, 100, 0.14);
+  border-color: rgba(255, 100, 100, 0.6);
+  color: #ff8f8f;
 }
 
 .btn--danger {
@@ -466,231 +450,212 @@
   color: #ff8f8f;
 }
 
-.btn--danger:hover {
+.btn--danger:hover:not(:disabled) {
   background: rgba(255, 100, 100, 0.12);
 }
 
-.candidates .btn:disabled,
-.candidate-modal .btn:disabled {
+.btn--danger.btn--danger-solid {
+  background: rgba(255, 100, 100, 0.16);
+  border-color: rgba(255, 100, 100, 0.6);
+  color: #ffb4b4;
+  font-weight: 700;
+}
+
+.btn--danger.btn--danger-solid:hover:not(:disabled) {
+  background: rgba(255, 100, 100, 0.28);
+  box-shadow: 0 8px 22px rgba(255, 100, 100, 0.18);
+}
+
+.cand-panel .btn:disabled,
+.cand-modal .btn:disabled {
   opacity: 0.6;
   cursor: not-allowed;
 }
 
-.candidates__more {
+
+/* ================================
+   Row tags: rating + follow-up
+================================ */
+
+.candidate-tags {
   display: flex;
-  justify-content: center;
-  padding: 16px 0 10px;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.candidate-tag {
+  padding: 2px 9px;
+
+  border: 1px solid var(--glass-line);
+  border-radius: 999px;
+
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 1.5;
+  font-variant-numeric: tabular-nums;
+}
+
+.candidate-tag--rating {
+  color: #ffd98a;
+  border-color: rgba(255, 200, 100, 0.4);
+  background: rgba(255, 200, 100, 0.1);
+}
+
+.candidate-tag--stale {
+  color: #ff9f9f;
+  border-color: rgba(255, 100, 100, 0.4);
+  background: rgba(255, 100, 100, 0.1);
 }
 
 
 /* ================================
-   Empty / Loading skeleton
+   Board (pipeline columns)
 ================================ */
 
-.empty-candidates {
-  padding: 56px 20px;
-  text-align: center;
-  color: var(--ink-3);
-  border: 1px dashed var(--glass-line);
+.candidate-board {
+  display: flex;
+  gap: 12px;
+  padding: 4px 18px 14px;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.board-col {
+  flex: 0 0 240px;
+  min-height: 160px;
+
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+
+  padding: 10px;
+
+  border: 1px solid var(--glass-line);
   border-radius: var(--radius-md);
-  margin: 8px;
-  background: radial-gradient(ellipse at top, rgba(var(--cand-accent), 0.06), transparent 70%);
+
+  background: rgba(255, 255, 255, 0.025);
+  transition: background .15s, border-color .15s;
 }
 
-.empty-candidates p {
-  margin: 0 0 16px;
-  font-size: 14px;
+.board-col--over {
+  border-color: rgba(var(--cand-accent), 0.6);
+  background: rgba(var(--cand-accent), 0.08);
 }
 
-.candidate-skeleton {
-  padding: 18px;
-}
-
-.candidate-skeleton + .candidate-skeleton {
-  border-top: 1px solid var(--glass-line);
-}
-
-.skeleton-bar {
-  height: 12px;
-  border-radius: 6px;
-  background: linear-gradient(
-    90deg,
-    rgba(255, 255, 255, 0.05) 25%,
-    rgba(255, 255, 255, 0.13) 50%,
-    rgba(255, 255, 255, 0.05) 75%
-  );
-  background-size: 200% 100%;
-  animation: candidate-shimmer 1.3s linear infinite;
-}
-
-.skeleton-bar--short { width: 55%; }
-.skeleton-bar--pill  { width: 130px; height: 30px; border-radius: 999px; }
-.skeleton-bar--btn   { width: 230px; height: 30px; border-radius: 999px; }
-
-@keyframes candidate-shimmer {
-  to { background-position: -200% 0; }
-}
-
-
-/* ================================
-   Modal shell
-================================ */
-
-.candidate-modal-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 1000;
-
+.board-col__head {
   display: flex;
   align-items: center;
-  justify-content: center;
-
-  padding: 20px;
-
-  background: radial-gradient(ellipse at top, rgba(12, 40, 65, 0.7), rgba(5, 15, 30, 0.82));
-  backdrop-filter: blur(8px);
-  animation: candidate-fade .18s ease-out;
+  justify-content: space-between;
+  gap: 8px;
 }
 
-@keyframes candidate-fade {
-  from { opacity: 0; }
-  to   { opacity: 1; }
+.board-col__body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
-.candidate-modal-overlay--top {
-  z-index: 1100;
+.board-col__empty {
+  margin: 14px 0;
+  color: var(--ink-3);
+  font-size: 12px;
+  text-align: center;
 }
 
-.candidate-modal-overlay--notice {
-  z-index: 1200;
+.board-card {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+
+  padding: 11px 12px;
+
+  border: 1px solid var(--glass-line);
+  border-radius: 12px;
+
+  background: rgba(255, 255, 255, 0.05);
+  cursor: grab;
+
+  transition: background .15s, border-color .15s, transform .15s var(--cand-ease);
 }
 
-.candidate-modal {
-  position: relative;
+.board-card:hover {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(var(--cand-accent), 0.45);
+  transform: translateY(-1px);
+}
+
+.board-card:active {
+  cursor: grabbing;
+}
+
+.board-card b {
+  color: var(--ink);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.board-card > span {
+  color: var(--ink-3);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+
+/* ================================
+   Modals (shell comes from .modal / .modal__card)
+================================ */
+
+.cand-modal {
   width: min(620px, 100%);
   max-height: 90vh;
   overflow-y: auto;
   overscroll-behavior: contain;
-
-  padding: 30px;
-
-  border: 1px solid var(--glass-line);
-  border-radius: var(--radius-lg);
-
-  background:
-    radial-gradient(ellipse 80% 40% at 50% -10%, rgba(var(--cand-accent), 0.1), transparent 70%),
-    rgba(12, 35, 55, 0.97);
-  box-shadow: 0 30px 90px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.06);
-
-  animation: candidate-modal-in .22s var(--cand-ease);
   scrollbar-width: thin;
 }
 
-@keyframes candidate-modal-in {
-  from { opacity: 0; transform: translateY(12px) scale(0.98); }
-  to   { opacity: 1; transform: none; }
-}
-
-.candidate-modal__header {
-  display: flex;
-  justify-content: space-between;
-  gap: 20px;
-  align-items: flex-start;
-  margin-bottom: 26px;
-  padding-bottom: 20px;
-  border-bottom: 1px solid var(--glass-line);
-}
-
-.candidate-modal__header h2 {
-  margin: 14px 0 6px;
-  font-size: 26px;
-  letter-spacing: -0.015em;
-  overflow-wrap: anywhere;
-}
-
-.candidate-modal__header p {
-  max-width: 460px;
-  margin: 0;
-  color: var(--ink-3);
-  font-size: 13px;
-  line-height: 1.5;
-}
-
-.modal-close {
-  width: 36px;
-  height: 36px;
-  flex-shrink: 0;
-
-  border: 1px solid var(--glass-line);
-  border-radius: 50%;
-
-  background: transparent;
-  color: var(--ink);
-
-  font-size: 22px;
-  line-height: 1;
-  cursor: pointer;
-  transition: background .15s, transform .2s var(--cand-ease);
-}
-
-.modal-close:hover:not(:disabled) {
-  background: var(--glass);
-  transform: rotate(90deg);
-}
-
-.modal-close:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-
-/* ================================
-   Small dialogs: delete + notice
-================================ */
-
-.candidate-modal.candidate-modal--small {
+.cand-modal.cand-modal--small {
   width: min(400px, 100%);
-  padding: 32px 28px 24px;
   text-align: center;
 }
 
-.candidate-modal__text {
-  margin: 0;
+.modal__actions--split {
+  justify-content: space-between;
+}
+
+.cand-actions-group {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.cand-modal--small .modal__actions {
+  justify-content: center;
+  margin-top: 22px;
+}
+
+.cand-modal--small .modal__actions .btn {
+  flex: 1;
+  justify-content: center;
+}
+
+.cand-dialog__title {
+  margin: 0 0 10px;
+  font-size: 22px;
+  letter-spacing: -0.01em;
+}
+
+.cand-dialog__text {
+  max-width: 320px;
+  margin: 0 auto;
   color: var(--ink-2);
   font-size: 14px;
   line-height: 1.6;
   overflow-wrap: anywhere;
 }
 
-.candidate-modal__text strong {
+.cand-dialog__text strong {
   color: var(--ink);
-}
-
-.candidate-notice__title {
-  margin: 14px 0 8px;
-}
-
-.candidate-modal--small .candidate-notice__title {
-  margin: 0 0 10px;
-  font-size: 22px;
-  letter-spacing: -0.01em;
-}
-
-.candidate-modal--small .candidate-modal__text {
-  max-width: 320px;
-  margin: 0 auto;
-}
-
-.candidate-modal--small .candidate-modal__actions {
-  justify-content: center;
-  margin-top: 26px;
-  padding-top: 0;
-  border-top: 0;
-}
-
-.candidate-modal--small .candidate-modal__actions .btn {
-  flex: 1;
-  justify-content: center;
 }
 
 .candidate-dialog-icon {
@@ -731,40 +696,141 @@
   100% { transform: scale(1); opacity: 1; }
 }
 
+.dialog-person {
+  display: flex;
+  align-items: center;
+  gap: 12px;
 
-/* ================================
-   Candidate form
-================================ */
+  margin: 0 0 16px;
+  padding: 12px 14px;
 
-.candidate-form-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 20px 18px;
+  border: 1px solid var(--glass-line);
+  border-radius: var(--radius-md);
+
+  background: rgba(255, 255, 255, 0.04);
+  text-align: left;
 }
 
-.candidate-form-field {
+.dialog-person__avatar {
+  width: 40px;
+  height: 40px;
+  flex-shrink: 0;
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  border: 1px solid rgba(255, 100, 100, 0.35);
+  border-radius: 50%;
+
+  background: rgba(255, 100, 100, 0.1);
+  color: #ff9f9f;
+
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.dialog-person__info {
+  min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 7px;
+  gap: 2px;
 }
 
-.candidate-form-field--full {
+.dialog-person__info b {
+  color: var(--ink);
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+
+.dialog-person__info span {
+  color: var(--ink-3);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.notice-summary {
+  margin: 18px 0 0;
+  padding: 4px 14px;
+
+  border: 1px solid var(--glass-line);
+  border-radius: var(--radius-md);
+
+  background: rgba(255, 255, 255, 0.03);
+  text-align: left;
+}
+
+.notice-summary > div {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 16px;
+  padding: 10px 0;
+}
+
+.notice-summary > div + div {
+  border-top: 1px solid var(--glass-line);
+}
+
+.notice-summary dt {
+  flex-shrink: 0;
+  color: var(--ink-3);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.notice-summary dd {
+  min-width: 0;
+  margin: 0;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 600;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+.notice-actions {
+  display: grid;
+  gap: 10px;
+  margin-top: 22px;
+}
+
+.notice-actions > .btn {
+  width: 100%;
+  justify-content: center;
+}
+
+.notice-actions__row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.notice-actions__row .btn {
+  justify-content: center;
+}
+
+
+/* ================================
+   Add / edit form
+================================ */
+
+.cand-form-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 18px;
+}
+
+.cand-form-grid__full {
   grid-column: 1 / -1;
 }
 
-.candidate-form-field label {
-  color: var(--ink-2);
-  font-size: 12px;
-  font-weight: 650;
-  letter-spacing: 0.02em;
-}
-
-.candidate-form-field input,
-.candidate-form-field select,
-.candidate-form-field textarea {
+.cand-form-grid .field textarea {
   width: 100%;
+  min-height: 90px;
   box-sizing: border-box;
-
   padding: 12px 14px;
 
   border: 1px solid var(--glass-line);
@@ -775,27 +841,15 @@
 
   outline: none;
   font: inherit;
+  resize: vertical;
   transition: border-color .18s, box-shadow .18s, background .18s;
 }
 
-.candidate-form-field input:hover,
-.candidate-form-field textarea:hover {
-  border-color: rgba(255, 255, 255, 0.2);
-}
-
-.candidate-form-field input::placeholder,
-.candidate-form-field textarea::placeholder {
+.cand-form-grid .field textarea::placeholder {
   color: var(--ink-3);
 }
 
-.candidate-form-field textarea {
-  min-height: 90px;
-  resize: vertical;
-}
-
-.candidate-form-field input:focus,
-.candidate-form-field select:focus,
-.candidate-form-field textarea:focus {
+.cand-form-grid .field textarea:focus {
   background: rgba(255, 255, 255, 0.08);
   border-color: rgba(var(--cand-accent), 0.55);
   box-shadow: 0 0 0 3px rgba(var(--cand-accent), 0.12);
@@ -825,10 +879,39 @@
   80% { transform: translateX(2px); }
 }
 
+.email-suggest {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
 
-/* ================================
-   Resume upload
-================================ */
+.email-suggest button {
+  padding: 5px 12px;
+
+  border: 1px solid var(--glass-line);
+  border-radius: 999px;
+
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--ink-2);
+
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+
+  transition: background .15s, border-color .15s, transform .15s var(--cand-ease);
+}
+
+.email-suggest button strong {
+  color: #8ae9c9;
+  font-weight: 650;
+}
+
+.email-suggest button:hover {
+  background: rgba(var(--cand-accent), 0.12);
+  border-color: rgba(var(--cand-accent), 0.5);
+  color: var(--ink);
+  transform: translateY(-1px);
+}
 
 .resume-upload-box {
   display: flex;
@@ -869,53 +952,7 @@
 
 
 /* ================================
-   Modal actions
-================================ */
-
-.candidate-modal__actions {
-  display: flex;
-  justify-content: flex-end;
-  align-items: center;
-  gap: 10px;
-
-  margin-top: 25px;
-  padding-top: 20px;
-
-  border-top: 1px solid var(--glass-line);
-}
-
-.candidate-modal__actions--split {
-  justify-content: space-between;
-}
-
-.candidate-modal__actions .btn {
-  min-height: 42px;
-  padding-left: 20px;
-  padding-right: 20px;
-  transition: background .15s, transform .15s var(--cand-ease), box-shadow .15s;
-}
-
-.candidate-modal__actions .btn:hover:not(:disabled) {
-  transform: translateY(-1px);
-}
-
-/* Primary button text readable on its light fill */
-.candidate-modal .btn--primary {
-  color: #0c2337;
-  font-weight: 700;
-}
-
-.candidate-modal .btn--primary:hover:not(:disabled) {
-  box-shadow: 0 8px 22px rgba(var(--cand-accent), 0.25);
-}
-
-.candidate-modal .btn--primary:disabled {
-  opacity: 0.7;
-}
-
-
-/* ================================
-   Candidate details (view modal)
+   Profile: details, email, feedback, history
 ================================ */
 
 .candidate-details {
@@ -956,22 +993,167 @@
   word-break: break-word;
 }
 
+.candidate-detail a:not(.btn) {
+  color: #8ae9c9;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  text-decoration-color: rgba(138, 233, 201, 0.4);
+}
+
+.candidate-detail a:not(.btn):hover {
+  text-decoration-color: currentColor;
+}
+
+.candidate-detail .candidate-status-select {
+  max-width: 240px;
+}
+
 .candidate-notes {
   white-space: pre-wrap;
   font-weight: 500;
   line-height: 1.55;
 }
 
-.candidate-detail a {
-  color: #8ae9c9;
-  text-decoration: underline;
-  text-underline-offset: 3px;
-  text-decoration-color: rgba(138, 233, 201, 0.4);
-  transition: text-decoration-color .15s;
+.candidate-followup {
+  margin: 0 0 18px;
+  padding: 12px 14px;
+
+  border: 1px solid rgba(255, 200, 100, 0.4);
+  border-left-width: 3px;
+  border-radius: var(--radius-md);
+
+  background: rgba(255, 200, 100, 0.08);
+  color: #ffd98a;
+
+  font-size: 13px;
+  line-height: 1.5;
 }
 
-.candidate-detail a:hover {
-  text-decoration-color: currentColor;
+.email-templates {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.rating-input {
+  display: flex;
+  gap: 4px;
+}
+
+.rating-input button {
+  width: 34px;
+  height: 34px;
+  padding: 0;
+
+  border: 1px solid var(--glass-line);
+  border-radius: 50%;
+
+  background: transparent;
+  color: var(--ink-3);
+
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+
+  transition: background .15s, color .15s, border-color .15s, transform .15s var(--cand-ease);
+}
+
+.rating-input button:hover {
+  color: #ffd98a;
+  transform: translateY(-1px);
+}
+
+.rating-input button.is-on {
+  color: #ffd98a;
+  border-color: rgba(255, 200, 100, 0.5);
+  background: rgba(255, 200, 100, 0.14);
+}
+
+.feedback-input {
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 60px;
+  padding: 10px 12px;
+
+  border: 1px solid var(--glass-line);
+  border-radius: var(--radius-md);
+
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--ink);
+
+  outline: none;
+  font: inherit;
+  font-size: 13px;
+  resize: vertical;
+
+  transition: border-color .18s, box-shadow .18s, background .18s;
+}
+
+.feedback-input::placeholder {
+  color: var(--ink-3);
+}
+
+.feedback-input:focus {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(var(--cand-accent), 0.55);
+  box-shadow: 0 0 0 3px rgba(var(--cand-accent), 0.12);
+}
+
+.feedback-save {
+  align-self: flex-start;
+}
+
+.timeline {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 12px;
+}
+
+.timeline__item {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.timeline__dot {
+  width: 8px;
+  height: 8px;
+  flex-shrink: 0;
+  margin-top: 6px;
+
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.35);
+}
+
+.timeline__item--status .timeline__dot,
+.timeline__item--created .timeline__dot {
+  background: #3cdcaa;
+  box-shadow: 0 0 0 3px rgba(60, 220, 170, 0.18);
+}
+
+.timeline__item--feedback .timeline__dot {
+  background: #ffd98a;
+  box-shadow: 0 0 0 3px rgba(255, 200, 100, 0.18);
+}
+
+.timeline__item p {
+  margin: 0;
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.timeline__stars {
+  color: #ffd98a;
+  letter-spacing: 1px;
+}
+
+.timeline__item small {
+  color: var(--ink-3);
+  font-size: 11px;
 }
 
 
@@ -1092,110 +1274,21 @@
 
 
 /* ================================
-   Sort select + toolbar buttons
+   Focus rings (one rule for all)
 ================================ */
 
-.candidate-sort {
-  padding: 10px 34px 10px 14px;
-
-  border: 1px solid var(--glass-line);
-  border-radius: 999px;
-
-  background-color: rgba(255, 255, 255, 0.06);
-  background-repeat: no-repeat;
-  background-position: right 13px center;
-  background-size: 10px;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8' fill='none' stroke='white' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M1 1.5l5 5 5-5'/%3E%3C/svg%3E");
-  color: var(--ink);
-
-  -webkit-appearance: none;
-  appearance: none;
-  outline: none;
-  font: inherit;
-  font-size: 13px;
-  cursor: pointer;
-
-  transition: border-color .18s, box-shadow .18s, background-color .18s;
-}
-
-.candidate-sort:hover {
-  background-color: rgba(255, 255, 255, 0.09);
-}
-
-.candidate-sort:focus {
-  border-color: rgba(var(--cand-accent), 0.55);
-  box-shadow: 0 0 0 3px rgba(var(--cand-accent), 0.12);
-}
-
-.candidate-sort option {
-  background: #0c2337;
-  color: #ffffff;
-}
-
-.candidate-toolbar .btn--small {
-  padding: 10px 16px;
-}
-
-.candidate-toolbar .btn--small:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-  transform: none;
-}
-
-
-/* ================================
-   Edit icon button (row)
-================================ */
-
-.candidate-icon-btn {
-  width: 34px;
-  height: 34px;
-
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-
-  padding: 0;
-
-  border: 1px solid var(--glass-line);
-  border-radius: 50%;
-
-  background: transparent;
-  color: var(--ink-2);
-
-  font-size: 15px;
-  line-height: 1;
-  cursor: pointer;
-
-  transition: background .15s, border-color .15s, color .15s,
-    transform .15s var(--cand-ease);
-}
-
-.candidate-icon-btn:hover {
-  background: rgba(var(--cand-accent), 0.12);
-  border-color: rgba(var(--cand-accent), 0.5);
-  color: #8ae9c9;
-  transform: translateY(-1px);
-}
-
-.candidate-icon-btn:active {
-  transform: translateY(0);
-}
-
-.candidate-icon-btn:focus-visible {
+.candidate__name:focus-visible,
+.candidate-chip:focus-visible,
+.candidate-view-toggle button:focus-visible,
+.candidate-status-select:focus-visible,
+.cand-icon-btn:focus-visible,
+.board-card:focus-visible,
+.email-suggest button:focus-visible,
+.rating-input button:focus-visible,
+.toast__action:focus-visible,
+.toast__close:focus-visible {
   outline: 2px solid rgba(var(--cand-accent), 0.7);
   outline-offset: 2px;
-}
-
-
-/* ================================
-   View modal: Edit + Done group
-================================ */
-
-.candidate-modal__actions-group {
-  display: flex;
-  align-items: center;
-  gap: 10px;
 }
 
 
@@ -1204,977 +1297,75 @@
 ================================ */
 
 @media (max-width: 900px) {
-  .candidate__header {
-    display: none;
-  }
-
-  .candidate,
-  .candidate-skeleton {
-    grid-template-columns: 1fr 1fr;
-    gap: 10px;
-  }
-
-  .candidate__actions {
-    grid-column: 1 / -1;
-  }
-
-  .candidate__resume {
-    width: auto;
-    min-width: 104px;
-  }
-
-  .candidate-status-select {
-    max-width: none;
-  }
-
-  .candidate-toolbar {
-    width: 100%;
+  .cand-toolbar {
+    padding-inline: 14px;
   }
 
   .candidate-search {
-    flex: 1;
-  }
-
-  .candidate-search input,
-  .candidate-search input:focus {
-    width: 100%;
+    max-width: none;
   }
 
   .candidate-search kbd {
     display: none;
   }
-}
 
-@media (max-width: 600px) {
-  .candidate,
-  .candidate-skeleton {
-    grid-template-columns: 1fr;
-  }
-
-  .candidate-form-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .candidate-form-field--full {
-    grid-column: auto;
-  }
-
-  .candidate-modal {
-    padding: 22px;
-  }
-
-  .candidate-modal.candidate-modal--small {
-    padding: 28px 20px 20px;
-  }
-
-  .candidate-modal__actions,
-  .candidate-modal__actions--split,
-  .candidate-modal--small .candidate-modal__actions {
-    flex-direction: column-reverse;
-  }
-
-  .candidate-modal__actions .btn {
-    width: 100%;
-  }
-
-  .candidate__actions {
-    grid-column: 1 / -1;
-  }
-
-  .candidate-toolbar {
-    flex-direction: column;
-    align-items: stretch;
-  }
-
-  .toast-stack {
-    bottom: 16px;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .skeleton-bar,
-  .candidate--new,
-  .candidate-modal,
-  .candidate-modal-overlay,
-  .candidate-dialog-icon--success,
-  .candidate-form-error,
-  .candidate-resume-state--busy,
-  .toast {
-    animation: none;
-  }
-
-  .candidate,
-  .candidate::before,
-  .btn--small,
-  .candidate-chip,
-  .candidate-status-select,
-  .modal-close,
-  .candidate-icon-btn,
-  .candidate-sort {
-    transition: none;
-  }
-}
-
-/* Mobile: toolbar and grouped modal buttons */
-@media (max-width: 900px) {
   .candidate-sort {
     flex: 1;
   }
-}
 
-@media (max-width: 600px) {
-  .candidate-toolbar .candidate-sort,
-  .candidate-toolbar .btn--small {
-    width: 100%;
+  .candidate-chips,
+  .bulk-bar {
+    padding-inline: 14px;
+    margin-inline: 14px;
   }
 
-  .candidate-modal__actions-group {
-    flex-direction: column-reverse;
-    width: 100%;
+  .candidate-chips {
+    margin-inline: 0;
   }
 
-  .candidate-modal__actions-group .btn {
-    width: 100%;
-  }
-}
-/* =====================================================
-   ADD THIS BLOCK AT THE VERY BOTTOM of Candidates.css
-   (keep everything that is already in the file).
-   Same colors and glass style, only new pieces.
-===================================================== */
-
-
-/* ================================
-   Email suggestions (add form)
-================================ */
-
-.candidate-form-hint {
-  color: var(--ink-3);
-  font-size: 11.5px;
-  line-height: 1.4;
-}
-
-.email-suggest {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-.email-suggest button {
-  padding: 5px 12px;
-
-  border: 1px solid var(--glass-line);
-  border-radius: 999px;
-
-  background: rgba(255, 255, 255, 0.05);
-  color: var(--ink-2);
-
-  font: inherit;
-  font-size: 12px;
-  cursor: pointer;
-
-  transition: background .15s, border-color .15s, transform .15s var(--cand-ease);
-}
-
-.email-suggest button strong {
-  color: #8ae9c9;
-  font-weight: 650;
-}
-
-.email-suggest button:hover {
-  background: rgba(var(--cand-accent), 0.12);
-  border-color: rgba(var(--cand-accent), 0.5);
-  color: var(--ink);
-  transform: translateY(-1px);
-}
-
-.email-suggest button:focus-visible {
-  outline: 2px solid rgba(var(--cand-accent), 0.7);
-  outline-offset: 2px;
-}
-
-
-/* ================================
-   Dialogs: person card (delete)
-================================ */
-
-.dialog-person {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-
-  margin: 0 0 16px;
-  padding: 12px 14px;
-
-  border: 1px solid var(--glass-line);
-  border-radius: var(--radius-md);
-
-  background: rgba(255, 255, 255, 0.04);
-  text-align: left;
-}
-
-.dialog-person__avatar {
-  width: 40px;
-  height: 40px;
-  flex-shrink: 0;
-
-  display: flex;
-  align-items: center;
-  justify-content: center;
-
-  border: 1px solid rgba(255, 100, 100, 0.35);
-  border-radius: 50%;
-
-  background: rgba(255, 100, 100, 0.1);
-  color: #ff9f9f;
-
-  font-size: 13px;
-  font-weight: 700;
-  letter-spacing: 0.02em;
-}
-
-.dialog-person__info {
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.dialog-person__info b {
-  color: var(--ink);
-  font-size: 14px;
-  overflow-wrap: anywhere;
-}
-
-.dialog-person__info span {
-  color: var(--ink-3);
-  font-size: 12px;
-  overflow-wrap: anywhere;
-}
-
-/* solid red confirm button */
-.btn--danger.btn--danger-solid {
-  background: rgba(255, 100, 100, 0.16);
-  border-color: rgba(255, 100, 100, 0.6);
-  color: #ffb4b4;
-  font-weight: 700;
-}
-
-.btn--danger.btn--danger-solid:hover:not(:disabled) {
-  background: rgba(255, 100, 100, 0.28);
-  box-shadow: 0 8px 22px rgba(255, 100, 100, 0.18);
-}
-
-
-/* ================================
-   Dialogs: "Candidate added"
-================================ */
-
-.notice-summary {
-  margin: 18px 0 0;
-  padding: 4px 14px;
-
-  border: 1px solid var(--glass-line);
-  border-radius: var(--radius-md);
-
-  background: rgba(255, 255, 255, 0.03);
-  text-align: left;
-}
-
-.notice-summary > div {
-  display: flex;
-  justify-content: space-between;
-  align-items: baseline;
-  gap: 16px;
-  padding: 10px 0;
-}
-
-.notice-summary > div + div {
-  border-top: 1px solid var(--glass-line);
-}
-
-.notice-summary dt {
-  flex-shrink: 0;
-  color: var(--ink-3);
-  font-size: 11px;
-  font-weight: 650;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-}
-
-.notice-summary dd {
-  min-width: 0;
-  margin: 0;
-  color: var(--ink);
-  font-size: 13px;
-  font-weight: 600;
-  text-align: right;
-  overflow-wrap: anywhere;
-}
-
-.notice-actions {
-  display: grid;
-  gap: 10px;
-  margin-top: 22px;
-}
-
-.notice-actions > .btn {
-  width: 100%;
-  min-height: 42px;
-  justify-content: center;
-}
-
-.notice-actions__row {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 10px;
-}
-
-.notice-actions__row .btn {
-  min-height: 42px;
-  justify-content: center;
-}
-
-.notice-actions .btn:hover:not(:disabled) {
-  transform: translateY(-1px);
-}
-
-@media (max-width: 600px) {
-  .notice-actions__row {
-    grid-template-columns: 1fr;
-  }
-
-  .notice-summary > div {
-    flex-direction: column;
-    gap: 2px;
-  }
-
-  .notice-summary dd {
+  .cand-table .cand-table__check {
+    width: auto;
     text-align: left;
   }
 }
 
-/* =====================================================
-   ADD THIS BLOCK AT THE VERY BOTTOM of Candidates.css
-   (keep everything that is already in the file).
-   If you pasted the earlier additions block, REPLACE it
-   with this one: this includes all of it plus the new parts.
-   Same colors and glass style.
-===================================================== */
-
-
-/* ================================
-   Email suggestions (add form)
-================================ */
-
-.candidate-form-hint {
-  color: var(--ink-3);
-  font-size: 11.5px;
-  line-height: 1.4;
-}
-
-.email-suggest {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-.email-suggest button {
-  padding: 5px 12px;
-
-  border: 1px solid var(--glass-line);
-  border-radius: 999px;
-
-  background: rgba(255, 255, 255, 0.05);
-  color: var(--ink-2);
-
-  font: inherit;
-  font-size: 12px;
-  cursor: pointer;
-
-  transition: background .15s, border-color .15s, transform .15s var(--cand-ease);
-}
-
-.email-suggest button strong {
-  color: #8ae9c9;
-  font-weight: 650;
-}
-
-.email-suggest button:hover {
-  background: rgba(var(--cand-accent), 0.12);
-  border-color: rgba(var(--cand-accent), 0.5);
-  color: var(--ink);
-  transform: translateY(-1px);
-}
-
-.email-suggest button:focus-visible {
-  outline: 2px solid rgba(var(--cand-accent), 0.7);
-  outline-offset: 2px;
-}
-
-
-/* ================================
-   Dialogs: person card (delete)
-================================ */
-
-.dialog-person {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-
-  margin: 0 0 16px;
-  padding: 12px 14px;
-
-  border: 1px solid var(--glass-line);
-  border-radius: var(--radius-md);
-
-  background: rgba(255, 255, 255, 0.04);
-  text-align: left;
-}
-
-.dialog-person__avatar {
-  width: 40px;
-  height: 40px;
-  flex-shrink: 0;
-
-  display: flex;
-  align-items: center;
-  justify-content: center;
-
-  border: 1px solid rgba(255, 100, 100, 0.35);
-  border-radius: 50%;
-
-  background: rgba(255, 100, 100, 0.1);
-  color: #ff9f9f;
-
-  font-size: 13px;
-  font-weight: 700;
-  letter-spacing: 0.02em;
-}
-
-.dialog-person__info {
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.dialog-person__info b {
-  color: var(--ink);
-  font-size: 14px;
-  overflow-wrap: anywhere;
-}
-
-.dialog-person__info span {
-  color: var(--ink-3);
-  font-size: 12px;
-  overflow-wrap: anywhere;
-}
-
-/* solid red confirm button */
-.btn--danger.btn--danger-solid {
-  background: rgba(255, 100, 100, 0.16);
-  border-color: rgba(255, 100, 100, 0.6);
-  color: #ffb4b4;
-  font-weight: 700;
-}
-
-.btn--danger.btn--danger-solid:hover:not(:disabled) {
-  background: rgba(255, 100, 100, 0.28);
-  box-shadow: 0 8px 22px rgba(255, 100, 100, 0.18);
-}
-
-
-/* ================================
-   Dialogs: "Candidate added" / import
-================================ */
-
-.notice-summary {
-  margin: 18px 0 0;
-  padding: 4px 14px;
-
-  border: 1px solid var(--glass-line);
-  border-radius: var(--radius-md);
-
-  background: rgba(255, 255, 255, 0.03);
-  text-align: left;
-}
-
-.notice-summary > div {
-  display: flex;
-  justify-content: space-between;
-  align-items: baseline;
-  gap: 16px;
-  padding: 10px 0;
-}
-
-.notice-summary > div + div {
-  border-top: 1px solid var(--glass-line);
-}
-
-.notice-summary dt {
-  flex-shrink: 0;
-  color: var(--ink-3);
-  font-size: 11px;
-  font-weight: 650;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-}
-
-.notice-summary dd {
-  min-width: 0;
-  margin: 0;
-  color: var(--ink);
-  font-size: 13px;
-  font-weight: 600;
-  text-align: right;
-  overflow-wrap: anywhere;
-}
-
-.notice-actions {
-  display: grid;
-  gap: 10px;
-  margin-top: 22px;
-}
-
-.notice-actions > .btn {
-  width: 100%;
-  min-height: 42px;
-  justify-content: center;
-}
-
-.notice-actions__row {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 10px;
-}
-
-.notice-actions__row .btn {
-  min-height: 42px;
-  justify-content: center;
-}
-
-.notice-actions .btn:hover:not(:disabled) {
-  transform: translateY(-1px);
-}
-
-
-/* ================================
-   Row tags: rating + follow-up
-================================ */
-
-.candidate-tags {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 6px;
-}
-
-.candidate-tag {
-  padding: 2px 9px;
-
-  border: 1px solid var(--glass-line);
-  border-radius: 999px;
-
-  font-size: 11px;
-  font-weight: 650;
-  line-height: 1.5;
-  font-variant-numeric: tabular-nums;
-}
-
-.candidate-tag--rating {
-  color: #ffd98a;
-  border-color: rgba(255, 200, 100, 0.4);
-  background: rgba(255, 200, 100, 0.1);
-}
-
-.candidate-tag--stale {
-  color: #ff9f9f;
-  border-color: rgba(255, 100, 100, 0.4);
-  background: rgba(255, 100, 100, 0.1);
-}
-
-.candidate-followup {
-  margin: -8px 0 18px;
-  padding: 12px 14px;
-
-  border: 1px solid rgba(255, 200, 100, 0.4);
-  border-left-width: 3px;
-  border-radius: var(--radius-md);
-
-  background: rgba(255, 200, 100, 0.08);
-  color: #ffd98a;
-
-  font-size: 13px;
-  line-height: 1.5;
-}
-
-
-/* ================================
-   Selection + bulk actions
-================================ */
-
-@media (min-width: 901px) {
-  .candidate__header--selectable,
-  .candidate--selectable {
-    grid-template-columns: 28px minmax(0, 1.3fr) minmax(0, 1fr) 200px 270px;
-  }
-}
-
-.candidate__select {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.candidate__select input {
-  width: 16px;
-  height: 16px;
-  margin: 0;
-  accent-color: rgb(var(--cand-accent));
-  cursor: pointer;
-}
-
-.candidate--selected {
-  background: linear-gradient(90deg, rgba(var(--cand-accent), 0.1), var(--glass) 55%);
-}
-
-.bulk-bar {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 10px;
-
-  margin: 0 8px 10px;
-  padding: 10px 14px;
-
-  border: 1px solid rgba(var(--cand-accent), 0.4);
-  border-radius: var(--radius-md);
-
-  background: linear-gradient(135deg, rgba(var(--cand-accent), 0.16), rgba(var(--cand-accent), 0.06));
-  animation: toast-in .2s var(--cand-ease);
-}
-
-.bulk-bar > b {
-  margin-right: auto;
-  color: #d5fff0;
-  font-size: 13px;
-}
-
-.bulk-bar__select {
-  padding-top: 8px;
-  padding-bottom: 8px;
-  font-size: 12px;
-}
-
-
-/* ================================
-   List / Board toggle
-================================ */
-
-.candidate-view-toggle {
-  display: inline-flex;
-  padding: 3px;
-
-  border: 1px solid var(--glass-line);
-  border-radius: 999px;
-
-  background: rgba(255, 255, 255, 0.06);
-}
-
-.candidate-view-toggle button {
-  padding: 7px 14px;
-
-  border: 0;
-  border-radius: 999px;
-
-  background: transparent;
-  color: var(--ink-2);
-
-  font: inherit;
-  font-size: 12px;
-  font-weight: 650;
-  cursor: pointer;
-
-  transition: background .15s, color .15s;
-}
-
-.candidate-view-toggle button:hover {
-  color: var(--ink);
-}
-
-.candidate-view-toggle button.is-active {
-  background: rgba(var(--cand-accent), 0.22);
-  color: #d5fff0;
-}
-
-.candidate-view-toggle button:focus-visible {
-  outline: 2px solid rgba(var(--cand-accent), 0.7);
-  outline-offset: 2px;
-}
-
-
-/* ================================
-   Board (pipeline columns)
-================================ */
-
-.candidate-board {
-  display: flex;
-  gap: 12px;
-  padding: 4px 4px 12px;
-  overflow-x: auto;
-  scrollbar-width: thin;
-}
-
-.board-col {
-  flex: 0 0 240px;
-  min-height: 160px;
-
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-
-  padding: 10px;
-
-  border: 1px solid var(--glass-line);
-  border-radius: var(--radius-md);
-
-  background: rgba(255, 255, 255, 0.025);
-  transition: background .15s, border-color .15s;
-}
-
-.board-col--over {
-  border-color: rgba(var(--cand-accent), 0.6);
-  background: rgba(var(--cand-accent), 0.08);
-}
-
-.board-col__head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.board-col__body {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.board-col__empty {
-  margin: 14px 0;
-  color: var(--ink-3);
-  font-size: 12px;
-  text-align: center;
-}
-
-.board-card {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-
-  padding: 11px 12px;
-
-  border: 1px solid var(--glass-line);
-  border-radius: 12px;
-
-  background: rgba(255, 255, 255, 0.05);
-  cursor: grab;
-
-  transition: background .15s, border-color .15s, transform .15s var(--cand-ease);
-}
-
-.board-card:hover {
-  background: rgba(255, 255, 255, 0.08);
-  border-color: rgba(var(--cand-accent), 0.45);
-  transform: translateY(-1px);
-}
-
-.board-card:active {
-  cursor: grabbing;
-}
-
-.board-card:focus-visible {
-  outline: 2px solid rgba(var(--cand-accent), 0.7);
-  outline-offset: 2px;
-}
-
-.board-card b {
-  color: var(--ink);
-  font-size: 13px;
-  overflow-wrap: anywhere;
-}
-
-.board-card > span {
-  color: var(--ink-3);
-  font-size: 12px;
-  overflow-wrap: anywhere;
-}
-
-
-/* ================================
-   Profile: quick email, feedback, history
-================================ */
-
-.email-templates {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.rating-input {
-  display: flex;
-  gap: 4px;
-}
-
-.rating-input button {
-  width: 34px;
-  height: 34px;
-  padding: 0;
-
-  border: 1px solid var(--glass-line);
-  border-radius: 50%;
-
-  background: transparent;
-  color: var(--ink-3);
-
-  font-size: 16px;
-  line-height: 1;
-  cursor: pointer;
-
-  transition: background .15s, color .15s, border-color .15s, transform .15s var(--cand-ease);
-}
-
-.rating-input button:hover {
-  color: #ffd98a;
-  transform: translateY(-1px);
-}
-
-.rating-input button.is-on {
-  color: #ffd98a;
-  border-color: rgba(255, 200, 100, 0.5);
-  background: rgba(255, 200, 100, 0.14);
-}
-
-.rating-input button:focus-visible {
-  outline: 2px solid rgba(var(--cand-accent), 0.7);
-  outline-offset: 2px;
-}
-
-.feedback-input {
-  width: 100%;
-  box-sizing: border-box;
-  min-height: 60px;
-  padding: 10px 12px;
-
-  border: 1px solid var(--glass-line);
-  border-radius: var(--radius-md);
-
-  background: rgba(255, 255, 255, 0.05);
-  color: var(--ink);
-
-  outline: none;
-  font: inherit;
-  font-size: 13px;
-  resize: vertical;
-
-  transition: border-color .18s, box-shadow .18s, background .18s;
-}
-
-.feedback-input::placeholder {
-  color: var(--ink-3);
-}
-
-.feedback-input:focus {
-  background: rgba(255, 255, 255, 0.08);
-  border-color: rgba(var(--cand-accent), 0.55);
-  box-shadow: 0 0 0 3px rgba(var(--cand-accent), 0.12);
-}
-
-.feedback-save {
-  align-self: flex-start;
-}
-
-.timeline {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: grid;
-  gap: 12px;
-}
-
-.timeline__item {
-  display: flex;
-  gap: 12px;
-  align-items: flex-start;
-}
-
-.timeline__dot {
-  width: 8px;
-  height: 8px;
-  flex-shrink: 0;
-  margin-top: 6px;
-
-  border-radius: 50%;
-  background: rgba(255, 255, 255, 0.35);
-}
-
-.timeline__item--status .timeline__dot,
-.timeline__item--created .timeline__dot {
-  background: #3cdcaa;
-  box-shadow: 0 0 0 3px rgba(60, 220, 170, 0.18);
-}
-
-.timeline__item--feedback .timeline__dot {
-  background: #ffd98a;
-  box-shadow: 0 0 0 3px rgba(255, 200, 100, 0.18);
-}
-
-.timeline__item p {
-  margin: 0;
-  color: var(--ink);
-  font-size: 13px;
-  line-height: 1.45;
-  overflow-wrap: anywhere;
-}
-
-.timeline__stars {
-  color: #ffd98a;
-  letter-spacing: 1px;
-}
-
-.timeline__item small {
-  color: var(--ink-3);
-  font-size: 11px;
-}
-
-
-/* ================================
-   Responsive additions
-================================ */
-
-@media (max-width: 900px) {
-  /* checkbox floats in the corner so the 2-column row layout still works */
-  .candidate--selectable {
-    padding-right: 52px;
+@media (max-width: 600px) {
+  .cand-head__actions .btn {
+    flex: 1;
+    justify-content: center;
   }
 
-  .candidate--selectable .candidate__select {
-    position: absolute;
-    top: 16px;
-    right: 18px;
+  .cand-form-grid {
+    grid-template-columns: 1fr;
   }
 
-  .candidate__header--selectable {
-    display: none;
+  .cand-form-grid__full {
+    grid-column: auto;
   }
 
   .candidate-view-toggle {
-    align-self: flex-start;
+    width: 100%;
   }
-}
 
-@media (max-width: 600px) {
+  .candidate-view-toggle button {
+    flex: 1;
+  }
+
+  .modal__actions,
+  .modal__actions--split {
+    flex-direction: column-reverse;
+  }
+
+  .modal__actions .btn,
+  .cand-actions-group,
+  .cand-actions-group .btn {
+    width: 100%;
+  }
+
+  .cand-actions-group {
+    flex-direction: column-reverse;
+  }
+
   .notice-actions__row {
     grid-template-columns: 1fr;
   }
@@ -2196,11 +1387,27 @@
     flex-basis: 100%;
   }
 
-  .candidate-toolbar .candidate-view-toggle {
-    width: 100%;
+  .toast-stack {
+    bottom: 16px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .candidate--new,
+  .candidate-dialog-icon--success,
+  .candidate-form-error,
+  .candidate-resume-state--busy,
+  .bulk-bar,
+  .toast {
+    animation: none;
   }
 
-  .candidate-view-toggle button {
-    flex: 1;
+  .candidate-chip,
+  .candidate-status-select,
+  .candidate-sort,
+  .cand-icon-btn,
+  .board-card,
+  .resume-upload-box {
+    transition: none;
   }
 }

@@ -9,6 +9,7 @@ import ProfilePage from './pages/ProfilePage.jsx'
 import ScreeningPage from './pages/ScreeningPage.jsx'
 import ScreeningReportPage from './pages/ScreeningReportPage.jsx'
 
+import ReportsPage from './pages/report.jsx'
 function AuthLoading() {
   return (
     <div
@@ -118,13 +119,25 @@ export default function App() {
             <ProtectedRoute>
               <ProfilePage />
             </ProtectedRoute>
-          }
-        />
+          }/>
+          <Route
+  path="/reports"
+  element={
+    <ProtectedRoute>
+      <ReportsPage />
+    </ProtectedRoute>
+  }/>
+  <Route
+  path="/interviews/:interviewId/reports/:candidateId"
+  element={
+    <ProtectedRoute>
+      <ReportsPage />
+    </ProtectedRoute>
+  }
+/>
 
-        <Route
-          path="*"
-          element={<Navigate to="/" replace />}
-        />
+        
+        
       </Routes>
     </AuthProvider>
   )
