@@ -398,25 +398,6 @@ function CandidateTags({ candidate }) {
   )
 }
 
-// One stage dropdown, used in the table and in the profile.
-function StageSelect({ candidate, busy, onChange }) {
-  return (
-    <select
-      className={`candidate-status-select pill--${getStatusType(candidate.status)}`}
-      value={candidate.status}
-      disabled={busy}
-      onChange={(event) => onChange(candidate, event.target.value)}
-      aria-label={`Update status for ${candidate.name}`}
-    >
-      {STATUSES.map((status) => (
-        <option key={status} value={status}>
-          {status}
-        </option>
-      ))}
-    </select>
-  )
-}
-
 // One modal shell, same markup as the Jobs page modals.
 function Modal({ onClose, labelledBy, role = 'dialog', describedBy, small = false, children }) {
   return (
@@ -509,7 +490,6 @@ export default function Candidates() {
   const [jobTitles, setJobTitles] = useState([])
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
-  const [updatingStatusId, setUpdatingStatusId] = useState(null)
   const [uploadingIds, setUploadingIds] = useState(() => new Set())
   const [deleting, setDeleting] = useState(false)
   const [deleteTargets, setDeleteTargets] = useState([])
@@ -520,13 +500,10 @@ export default function Candidates() {
   const search = useDebounced(searchInput, 200)
   const [filterStatus, setFilterStatus] = useState('All')
   const [sortBy, setSortBy] = useState('newest')
-  const [view, setView] = useState('list')
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE)
 
   const [selectedIds, setSelectedIds] = useState(() => new Set())
-  const [bulkBusy, setBulkBusy] = useState(false)
   const [importing, setImporting] = useState(false)
-  const [dragOverStatus, setDragOverStatus] = useState(null)
 
   const [showAddModal, setShowAddModal] = useState(false)
   const [editingId, setEditingId] = useState(null)
@@ -545,7 +522,6 @@ export default function Candidates() {
 
   const [toasts, setToasts] = useState([])
 
-  const isBoard = view === 'board'
   const isEditing = Boolean(editingId)
 
   /* ---------- toasts ---------- */
@@ -740,6 +716,30 @@ export default function Candidates() {
 
   const followUpCount = useMemo(() => candidates.filter(isStale).length, [candidates])
 
+  // Dashboard numbers: recomputed whenever the live candidate list changes.
+  const dashboard = useMemo(() => {
+    const total = candidates.length
+    const hired = statusCounts.Hired || 0
+    const rejected = statusCounts.Rejected || 0
+    const rated = candidates.filter((candidate) => candidate.ratingCount > 0)
+    const averageScore = rated.length
+      ? rated.reduce((sum, candidate) => sum + averageRating(candidate), 0) / rated.length
+      : 0
+
+    return {
+      total,
+      active: total - hired - rejected,
+      hired,
+      rejected,
+      averageScore,
+      newThisWeek: candidates.filter((candidate) => Date.now() - candidate.createdMs < 7 * DAY_MS)
+        .length,
+      pipeline: STATUSES.map((status) => ({ status, count: statusCounts[status] || 0 })).filter(
+        (item) => item.count > 0
+      ),
+    }
+  }, [candidates, statusCounts])
+
   const filteredCandidates = useMemo(() => {
     const searchTerm = search.trim().toLowerCase()
 
@@ -785,12 +785,6 @@ export default function Candidates() {
 
   const shownCandidates = filteredCandidates.slice(0, visibleCount)
 
-  const boardGroups = useMemo(() => {
-    const groups = Object.fromEntries(STATUSES.map((status) => [status, []]))
-    filteredCandidates.forEach((candidate) => groups[candidate.status]?.push(candidate))
-    return groups
-  }, [filteredCandidates])
-
   const selectedList = useMemo(
     () => candidates.filter((candidate) => selectedIds.has(candidate.id)),
     [candidates, selectedIds]
@@ -823,7 +817,7 @@ export default function Candidates() {
     setVisibleCount(PAGE_SIZE)
     // A selection that is no longer on screen shouldn't be acted on by mistake.
     setSelectedIds(new Set())
-  }, [search, filterStatus, sortBy, view])
+  }, [search, filterStatus, sortBy])
 
   // Drop selections for candidates that no longer exist.
   useEffect(() => {
@@ -1227,78 +1221,6 @@ export default function Candidates() {
     else handleAddCandidate(keepOpen)
   }
 
-  /* ---------- update status ---------- */
-
-  async function handleStatusChange(candidate, newStatus) {
-    if (!user?.uid || !candidate?.id || !newStatus || candidate.status === newStatus) return
-
-    const previousStatus = candidate.status
-    const setStatus = (status, extra = {}) =>
-      setCandidates((previous) =>
-        previous.map((item) =>
-          item.id === candidate.id ? { ...item, status, ...extra } : item
-        )
-      )
-
-    setUpdatingStatusId(candidate.id)
-
-    // Instant UI update; the live listener confirms it.
-    setStatus(newStatus, { updatedMs: Date.now() })
-
-    try {
-      await updateDoc(candidateRef(candidate.id), {
-        status: newStatus,
-        updatedAt: serverTimestamp(),
-      })
-
-      logActivity(candidate.id, 'status', `Moved from ${previousStatus} to ${newStatus}`)
-
-      pushToast('success', `${candidate.name} moved to ${newStatus}`, { duration: 2500 })
-    } catch (error) {
-      console.error('Failed to update candidate status:', error)
-      setStatus(previousStatus)
-      pushToast('error', `Status wasn’t changed. ${getErrorMessage(error)}`)
-    } finally {
-      setUpdatingStatusId(null)
-    }
-  }
-
-  /* ---------- bulk: move many candidates to one stage ---------- */
-
-  async function handleBulkStatus(newStatus) {
-    if (!user?.uid || !newStatus || selectedList.length === 0) return
-
-    const targets = selectedList.filter((candidate) => candidate.status !== newStatus)
-
-    if (targets.length === 0) {
-      pushToast('success', `Everyone selected is already at ${newStatus}`, { duration: 2500 })
-      return
-    }
-
-    setBulkBusy(true)
-
-    try {
-      await commitInBatches(targets, (batch, candidate) => {
-        batch.update(candidateRef(candidate.id), {
-          status: newStatus,
-          updatedAt: serverTimestamp(),
-        })
-        batch.set(
-          newActivityRef(candidate.id),
-          activityEntry('status', `Moved from ${candidate.status} to ${newStatus}`)
-        )
-      })
-
-      setSelectedIds(new Set())
-      pushToast('success', `${plural(targets.length, 'candidate')} moved to ${newStatus}`)
-    } catch (error) {
-      console.error('Bulk status change failed:', error)
-      pushToast('error', `Stages weren’t changed. ${getErrorMessage(error)}`)
-    } finally {
-      setBulkBusy(false)
-    }
-  }
-
   /* ---------- delete (confirm first, then 8s to undo) ---------- */
 
   async function handleDeleteCandidates() {
@@ -1563,18 +1485,6 @@ export default function Candidates() {
     }
   }
 
-  /* ---------- board: drag a card to a new stage ---------- */
-
-  function handleBoardDrop(event, status) {
-    event.preventDefault()
-    setDragOverStatus(null)
-
-    const id = event.dataTransfer.getData('text/plain')
-    const candidate = candidates.find((item) => item.id === id)
-
-    if (candidate) handleStatusChange(candidate, status)
-  }
-
   /* =========================================
      UI
   ========================================= */
@@ -1611,42 +1521,59 @@ export default function Candidates() {
             <span className="eyebrow">Your workspace</span>
             <h1>Candidates</h1>
             <p>Manage candidates, review resumes, and track each one through your hiring process.</p>
+            <div className="cand-head__actions">
+              <button
+                type="button"
+                className="btn"
+                onClick={() => importInputRef.current?.click()}
+                disabled={importing}
+                title="Add many candidates from a CSV file (Name, Email, Role, Phone, Notes)"
+              >
+                {importing ? 'Importing…' : 'Import CSV'}
+              </button>
+  
+              <button
+                type="button"
+                className="btn"
+                onClick={() => exportCandidates(filteredCandidates)}
+                disabled={filteredCandidates.length === 0}
+                title="Download the candidates shown as a CSV file"
+              >
+                Export CSV
+              </button>
+  
+              <button className="btn btn--primary jobs-page__add" onClick={openAddModal}>
+                <span aria-hidden="true">＋</span> Add candidate
+              </button>
+  
+              <input
+                ref={importInputRef}
+                type="file"
+                accept=".csv,text/csv"
+                onChange={handleImportFile}
+                aria-label="Import candidates from a CSV file"
+                className="visually-hidden"
+              />
+            </div>
           </div>
 
-          <div className="cand-head__actions">
-            <button
-              type="button"
-              className="btn"
-              onClick={() => importInputRef.current?.click()}
-              disabled={importing}
-              title="Add many candidates from a CSV file (Name, Email, Role, Phone, Notes)"
-            >
-              {importing ? 'Importing…' : 'Import CSV'}
+          <div className="cand-hero-stats glass glass--lg" aria-label="Candidate dashboard" aria-live="polite">
+            <button type="button" className="cand-hero-tile" onClick={() => setFilterStatus('All')}>
+              <strong>{dashboard.total}</strong>
+              <span>Total candidates</span>
             </button>
 
-            <button
-              type="button"
-              className="btn"
-              onClick={() => exportCandidates(filteredCandidates)}
-              disabled={filteredCandidates.length === 0}
-              title="Download the candidates shown as a CSV file"
-            >
-              Export CSV
+            <button type="button" className="cand-hero-tile" onClick={() => setFilterStatus('Follow-up')}>
+              <strong>{followUpCount}</strong>
+              <span><i className="cand-hero-dot" /> Needs follow-up</span>
             </button>
 
-            <button className="btn btn--primary jobs-page__add" onClick={openAddModal}>
-              <span aria-hidden="true">＋</span> Add candidate
-            </button>
-
-            <input
-              ref={importInputRef}
-              type="file"
-              accept=".csv,text/csv"
-              onChange={handleImportFile}
-              aria-label="Import candidates from a CSV file"
-              className="visually-hidden"
-            />
+            <div className="cand-hero-tile">
+              <strong>{dashboard.averageScore ? dashboard.averageScore.toFixed(1) : '—'}</strong>
+              <span>Average rating</span>
+            </div>
           </div>
+
         </section>
 
         <section className="jobs-table-wrap glass glass--lg cand-panel">
@@ -1676,22 +1603,8 @@ export default function Candidates() {
               ))}
             </select>
 
-            <div className="candidate-view-toggle" role="group" aria-label="Choose layout">
-              {['list', 'board'].map((mode) => (
-                <button
-                  key={mode}
-                  type="button"
-                  className={view === mode ? 'is-active' : ''}
-                  aria-pressed={view === mode}
-                  onClick={() => setView(mode)}
-                >
-                  {mode === 'list' ? 'List' : 'Board'}
-                </button>
-              ))}
-            </div>
           </div>
 
-          {!isBoard && (
             <div className="candidate-chips" role="group" aria-label="Filter by status">
               {chips.map((chip) => (
                 <button
@@ -1708,28 +1621,11 @@ export default function Candidates() {
                 </button>
               ))}
             </div>
-          )}
 
-          {!isBoard && selectedList.length > 0 && (
+          {selectedList.length > 0 && (
             <div className="bulk-bar" role="region" aria-label="Bulk actions">
               <b>{selectedList.length} selected</b>
 
-              <select
-                className="candidate-sort bulk-bar__select"
-                value=""
-                onChange={(event) => handleBulkStatus(event.target.value)}
-                disabled={bulkBusy}
-                aria-label="Move selected candidates to a stage"
-              >
-                <option value="" disabled>
-                  {bulkBusy ? 'Updating…' : 'Move to stage…'}
-                </option>
-                {STATUSES.map((status) => (
-                  <option key={status} value={status}>
-                    {status}
-                  </option>
-                ))}
-              </select>
 
               <button
                 type="button"
@@ -1743,7 +1639,6 @@ export default function Candidates() {
                 type="button"
                 className="btn btn--small btn--danger"
                 onClick={() => setDeleteTargets(selectedList)}
-                disabled={bulkBusy}
               >
                 Delete
               </button>
@@ -1792,66 +1687,6 @@ export default function Candidates() {
                 </>
               )}
             </div>
-          ) : isBoard ? (
-            <div className="candidate-board" aria-label="Hiring pipeline">
-              {STATUSES.map((status) => {
-                const items = boardGroups[status]
-
-                return (
-                  <div
-                    key={status}
-                    className={`board-col ${dragOverStatus === status ? 'board-col--over' : ''}`}
-                    onDragOver={(event) => {
-                      event.preventDefault()
-                      setDragOverStatus(status)
-                    }}
-                    onDragLeave={() =>
-                      setDragOverStatus((current) => (current === status ? null : current))
-                    }
-                    onDrop={(event) => handleBoardDrop(event, status)}
-                  >
-                    <div className="board-col__head">
-                      <StatusBadge status={status} />
-                      <span className="candidate-chip__count">{items.length}</span>
-                    </div>
-
-                    <div className="board-col__body">
-                      {items.length === 0 ? (
-                        <p className="board-col__empty">Drop a card here</p>
-                      ) : (
-                        items.map((candidate) => (
-                          <div
-                            key={candidate.id}
-                            className={`board-card ${
-                              highlightId === candidate.id ? 'candidate--new' : ''
-                            }`}
-                            draggable
-                            tabIndex={0}
-                            role="button"
-                            aria-label={`Open ${candidate.name}`}
-                            onDragStart={(event) => {
-                              event.dataTransfer.setData('text/plain', candidate.id)
-                              event.dataTransfer.effectAllowed = 'move'
-                            }}
-                            onClick={() => setSelectedId(candidate.id)}
-                            onKeyDown={(event) => {
-                              if (event.key === 'Enter' || event.key === ' ') {
-                                event.preventDefault()
-                                setSelectedId(candidate.id)
-                              }
-                            }}
-                          >
-                            <b>{candidate.name}</b>
-                            <span>{candidate.role}</span>
-                            <CandidateTags candidate={candidate} />
-                          </div>
-                        ))
-                      )}
-                    </div>
-                  </div>
-                )
-              })}
-            </div>
           ) : (
             <div className="jobs-table-scroll">
               <table className="jobs-table cand-table">
@@ -1872,7 +1707,7 @@ export default function Candidates() {
                     </th>
                     <th>Candidate</th>
                     <th>Role</th>
-                    <th>Stage</th>
+                    <th>Status</th>
                     <th>Added</th>
                     <th>
                       <span className="visually-hidden">Actions</span>
@@ -1916,12 +1751,8 @@ export default function Candidates() {
 
                         <td data-label="Role">{candidate.role}</td>
 
-                        <td data-label="Stage">
-                          <StageSelect
-                            candidate={candidate}
-                            busy={updatingStatusId === candidate.id}
-                            onChange={handleStatusChange}
-                          />
+                        <td data-label="Status">
+                          <StatusBadge status={candidate.status} />
                         </td>
 
                         <td data-label="Added">{formatDate(candidate.createdMs)}</td>
@@ -2231,18 +2062,14 @@ export default function Candidates() {
 
           {isStale(selectedCandidate) && (
             <div className="candidate-followup" role="note">
-              No update for {daysSince(selectedCandidate.updatedMs)} days. Move them to the next
-              stage, add feedback, or send a quick email below.
+              No update for {daysSince(selectedCandidate.updatedMs)} days. Add feedback or send a
+              quick email below; their status updates automatically.
             </div>
           )}
 
           <div className="candidate-details">
-            <Detail label="Hiring stage">
-              <StageSelect
-                candidate={selectedCandidate}
-                busy={updatingStatusId === selectedCandidate.id}
-                onChange={handleStatusChange}
-              />
+            <Detail label="Status">
+              <StatusBadge status={selectedCandidate.status} />
             </Detail>
 
             <Detail label="Applying for">

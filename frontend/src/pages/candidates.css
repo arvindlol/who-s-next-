@@ -1411,3 +1411,93 @@
     transition: none;
   }
 }
+
+/* Dashboard header: intro on the left, stat tiles in a glass panel on the right */
+.jobs-page__head {
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 32px;
+}
+
+.jobs-page__head > div:first-child {
+  flex: 1 1 420px;
+  max-width: 600px;
+}
+
+.jobs-page__head .cand-head__actions {
+  margin-top: 20px;
+}
+
+.cand-hero-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(130px, 1fr));
+  gap: 16px;
+
+  flex: 0 1 560px;
+  padding: 16px;
+
+  border: 1px solid var(--glass-line);
+  border-radius: 28px;
+}
+
+.cand-hero-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+
+  padding: 20px;
+
+  border: 1px solid var(--glass-line);
+  border-radius: 20px;
+
+  background: rgba(8, 12, 32, 0.6);
+  color: var(--ink);
+
+  font: inherit;
+  text-align: left;
+}
+
+button.cand-hero-tile {
+  cursor: pointer;
+  transition: border-color .18s, transform .18s var(--cand-ease);
+}
+
+button.cand-hero-tile:hover {
+  border-color: rgba(var(--cand-accent), 0.5);
+  transform: translateY(-1px);
+}
+
+button.cand-hero-tile:focus-visible {
+  outline: 2px solid rgba(var(--cand-accent), 0.7);
+  outline-offset: 2px;
+}
+
+.cand-hero-tile strong {
+  font-size: 44px;
+  font-weight: 600;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.cand-hero-tile span {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--ink-2);
+  font-size: 15px;
+}
+
+.cand-hero-dot {
+  width: 8px;
+  height: 8px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: #ffc864;
+}
+
+@media (max-width: 700px) {
+  .cand-hero-stats {
+    grid-template-columns: 1fr;
+    flex-basis: 100%;
+  }
+}
