@@ -2,7 +2,12 @@ import { Navigate, Route, Routes } from 'react-router-dom'
 import { AuthProvider, useAuth } from './auth.jsx'
 import Backdrop from './components/Backdrop.jsx'
 import Auth from './pages/Auth.jsx'
+import Candidates from './pages/Candidates.jsx'
 import Home from './pages/Home.jsx'
+import InterviewsPage from './pages/InterviewsPage.jsx'
+import InterviewPlanPage from './pages/InterviewPlanPage.jsx'
+import InterviewPlanReviewPage from './pages/InterviewPlanReviewPage.jsx'
+import InterviewTranscriptPage from './pages/InterviewTranscriptPage.jsx'
 import JobsPage from './pages/JobsPage.jsx'
 import ProfilePage from './pages/ProfilePage.jsx'
 import ScreeningPage from './pages/ScreeningPage.jsx'
@@ -76,6 +81,14 @@ export default function App() {
           }
         />
         <Route
+          path="/candidates"
+          element={
+            <ProtectedRoute>
+              <Candidates />
+            </ProtectedRoute>
+          }
+        />
+        <Route
           path="/screening"
           element={
             <ProtectedRoute>
@@ -88,6 +101,38 @@ export default function App() {
           element={
             <ProtectedRoute>
               <ScreeningReportPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/interviews"
+          element={
+            <ProtectedRoute>
+              <InterviewsPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/interviews/:interviewId/plan"
+          element={
+            <ProtectedRoute>
+              <InterviewPlanPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/interviews/:interviewId/review"
+          element={
+            <ProtectedRoute>
+              <InterviewPlanReviewPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/interviews/:interviewId/transcript"
+          element={
+            <ProtectedRoute>
+              <InterviewTranscriptPage />
             </ProtectedRoute>
           }
         />

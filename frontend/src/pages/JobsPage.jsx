@@ -224,7 +224,12 @@ function ViewJobModal({ job, onClose }) {
 
   return (
     <div className="modal" onMouseDown={event => event.target === event.currentTarget && onClose()}>
-      <section className="modal__card job-viewer glass glass--strong" role="dialog" aria-modal="true" aria-labelledby="view-job-title">
+      <section
+        className={`modal__card job-viewer${additionalCriteria.length === 0 ? ' job-viewer--without-criteria' : ''} glass glass--strong`}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="view-job-title"
+      >
         <div className="modal__head">
           <div>
             <h3 id="view-job-title">{job.title}</h3>
@@ -233,14 +238,16 @@ function ViewJobModal({ job, onClose }) {
           <button className="icon-btn" type="button" onClick={onClose} aria-label="Close">×</button>
         </div>
 
-        <section className="job-viewer__criteria" hidden={additionalCriteria.length === 0}>
-          <b>Additional hiring criteria</b>
-          <ol>
-            {additionalCriteria.map((criterion, index) => (
-              <li key={criterion.id || `${index}-${criterion}`}>{typeof criterion === 'string' ? criterion : criterion.text}</li>
-            ))}
-          </ol>
-        </section>
+        {additionalCriteria.length > 0 && (
+          <section className="job-viewer__criteria">
+            <b>Additional hiring criteria</b>
+            <ol>
+              {additionalCriteria.map((criterion, index) => (
+                <li key={criterion.id || `${index}-${criterion}`}>{typeof criterion === 'string' ? criterion : criterion.text}</li>
+              ))}
+            </ol>
+          </section>
+        )}
 
         <div className="job-viewer__body">
           {!url && !error && <div className="job-viewer__loading">Opening document…</div>}
@@ -480,7 +487,7 @@ export default function JobsPage() {
                         {job.status === 'ready' && workflowStage !== 'completed' && (
                           <Link
                             className="btn btn--primary btn--small"
-                            to={`/candidates?jobId=${encodeURIComponent(job.id)}&mode=select`}
+                            to={`/screening?new=true&jobId=${encodeURIComponent(job.id)}`}
                           >
                             Select candidates
                           </Link>
