@@ -15,5 +15,19 @@ service firebase.storage {
           || request.resource.contentType == 'application/octet-stream'
         );
     }
+
+    match /resumes/{userId}/{fileName} {
+      allow read, delete: if request.auth != null && request.auth.uid == userId;
+      allow create, update: if request.auth != null
+        && request.auth.uid == userId
+        && request.resource.size <= 10 * 1024 * 1024
+        && (
+          request.resource.contentType == 'application/pdf'
+          || request.resource.contentType == 'application/msword'
+          || request.resource.contentType == 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+          || request.resource.contentType == 'text/plain'
+          || request.resource.contentType == 'application/octet-stream'
+        );
+    }
   }
 }

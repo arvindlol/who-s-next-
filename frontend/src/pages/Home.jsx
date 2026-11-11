@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link, NavLink, useNavigate } from 'react-router-dom'
+import { collection, onSnapshot, query, where } from 'firebase/firestore'
 import Brand from '../components/Brand.jsx'
 import { useAuth } from '../auth.jsx'
+import { db } from '../firebase.js'
 import { subscribeToDashboardStats } from '../services/dashboard.js'
 import { subscribeToHomeJobs } from '../services/homeJobs.js'
-import { getScreenings } from '../data/screeningDemo.js'
 
 const PIPELINE = [
   { n: 1, title: 'Job description', desc: 'Extract the skills and responsibilities that matter.', ai: true },
@@ -25,6 +26,10 @@ function formatJobDate(timestamp) {
   return `Uploaded ${date}`
 }
 
+function timestampValue(timestamp) {
+  return timestamp?.toMillis?.() || 0
+}
+
 export default function Home() {
   const { user, signOut } = useAuth()
   const navigate = useNavigate()
@@ -39,24 +44,9 @@ export default function Home() {
   const [homeJobs, setHomeJobs] = useState([])
   const [homeJobsLoading, setHomeJobsLoading] = useState(true)
   const [homeJobsError, setHomeJobsError] = useState(false)
-  const recentCandidates = useMemo(() => {
-    const seenCandidateIds = new Set()
-    const candidates = []
-
-    getScreenings().forEach(screening => {
-      screening.results.forEach(candidate => {
-        if (seenCandidateIds.has(candidate.id)) return
-        seenCandidateIds.add(candidate.id)
-        candidates.push({
-          ...candidate,
-          jobTitle: screening.jobTitle,
-          workflowStatus: screening.status === 'completed' ? 'Screening ready' : 'Resume uploaded',
-        })
-      })
-    })
-
-    return candidates.slice(0, 3)
-  }, [])
+  const [recentCandidates, setRecentCandidates] = useState([])
+  const [recentCandidatesLoading, setRecentCandidatesLoading] = useState(true)
+  const [recentCandidatesError, setRecentCandidatesError] = useState(false)
 
   useEffect(() => {
     if (!user?.uid) return undefined
@@ -69,6 +59,31 @@ export default function Home() {
       error => {
         console.error('Could not load dashboard statistics:', error)
         setStatsError(true)
+      },
+    )
+  }, [user?.uid])
+
+  useEffect(() => {
+    if (!user?.uid) return undefined
+
+    setRecentCandidatesLoading(true)
+    setRecentCandidatesError(false)
+
+    return onSnapshot(
+      query(collection(db, 'candidates'), where('ownerId', '==', user.uid)),
+      snapshot => {
+        const candidates = snapshot.docs
+          .map(candidateDoc => ({ id: candidateDoc.id, ...candidateDoc.data() }))
+          .sort((first, second) => timestampValue(second.createdAt) - timestampValue(first.createdAt))
+          .slice(0, 3)
+
+        setRecentCandidates(candidates)
+        setRecentCandidatesLoading(false)
+      },
+      error => {
+        console.error('Could not load recent candidates:', error)
+        setRecentCandidatesError(true)
+        setRecentCandidatesLoading(false)
       },
     )
   }, [user?.uid])
@@ -168,7 +183,11 @@ export default function Home() {
           <div>
             <div className="section__head"><h2>Your Candidates</h2><Link to="/candidates">View all</Link></div>
             <div className="home-candidates glass glass--lg">
-              {recentCandidates.length === 0 ? (
+              {recentCandidatesLoading ? (
+                <div className="empty"><b>Loading your candidates…</b></div>
+              ) : recentCandidatesError ? (
+                <div className="empty"><b>Could not load your candidates</b><span>Please refresh and try again.</span></div>
+              ) : recentCandidates.length === 0 ? (
                 <div className="empty">
                   <b>No candidates yet</b>
                   <span>Add a candidate and their resume to begin screening.</span>
@@ -176,13 +195,13 @@ export default function Home() {
               ) : recentCandidates.map(candidate => (
                 <Link className="home-candidate" to={`/candidates?candidateId=${encodeURIComponent(candidate.id)}`} key={candidate.id}>
                   <span className="home-candidate__avatar" aria-hidden="true">
-                    {candidate.name.split(/\s+/).map(part => part[0]).slice(0, 2).join('').toUpperCase()}
+                    {(candidate.name || 'Candidate').split(/\s+/).map(part => part[0]).slice(0, 2).join('').toUpperCase()}
                   </span>
                   <span className="home-candidate__details">
-                    <b>{candidate.name}</b>
-                    <small>{candidate.jobTitle}</small>
+                    <b>{candidate.name || 'Unnamed candidate'}</b>
+                    <small>{candidate.role || 'Role not specified'}</small>
                   </span>
-                  <span className="pill pill--live"><span className="dot" />{candidate.workflowStatus}</span>
+                  <span className="pill pill--live"><span className="dot" />{candidate.status || 'Screening'}</span>
                 </Link>
               ))}
             </div>
