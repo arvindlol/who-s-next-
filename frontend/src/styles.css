@@ -1360,3 +1360,93 @@ button { cursor: pointer; }
   .report-summary, .report-grid section { background: white; border-color: #ccc; }
 }
  
+
+
+/* ==========================================================================
+   Unified version additions: workflow notices, plan editing, transcript tools,
+   privacy notes, account deletion and report details.
+   ========================================================================== */
+
+.privacy-note {
+  margin: 0 0 18px;
+  padding: 10px 14px;
+  color: var(--ink-2);
+  border: 1px solid rgba(246, 199, 106, 0.3);
+  border-radius: var(--radius-md);
+  background: rgba(246, 199, 106, 0.07);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.workflow-notice {
+  margin: 0 0 18px;
+  padding: 12px 16px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+  border: 1px solid rgba(143, 208, 255, 0.28);
+  border-radius: var(--radius-md);
+  background: rgba(143, 208, 255, 0.08);
+  font-size: 13px;
+}
+.workflow-notice b { color: var(--ink); }
+.workflow-notice span { color: var(--ink-2); flex: 1 1 240px; }
+
+.field .hint--ok { color: var(--ok); }
+
+.auth__link {
+  align-self: flex-end;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.auth__link:hover { text-decoration: underline; }
+
+/* Plan page: the settings column is a <fieldset> so it can be disabled as a whole. */
+fieldset.interview-plan__main { margin: 0; padding: 0; min-width: 0; border: 0; }
+.plan-receipt__progress { color: var(--accent); }
+
+.plan-review__status--approved { color: #b6f3d9; border-color: rgba(79, 209, 164, 0.35); background: rgba(79, 209, 164, 0.08); }
+.plan-review__status--approved .dot { background: var(--ok); }
+
+.plan-edit-question > div { display: grid; gap: 10px; }
+.plan-edit-field { display: grid; gap: 4px; }
+.plan-edit-field span { color: var(--ink-3); font-size: 11px; font-weight: 700; }
+.plan-edit-field textarea,
+.plan-edit-field input,
+.plan-edit-section-name,
+.plan-edit-minutes input {
+  width: 100%;
+  padding: 9px 11px;
+  color: var(--ink);
+  border: 1px solid var(--glass-line);
+  border-radius: var(--radius-sm);
+  background: rgba(6, 12, 24, 0.35);
+  font: inherit;
+  font-size: 13px;
+}
+.plan-edit-field textarea { resize: vertical; }
+.plan-edit-section-name { max-width: 420px; font-weight: 700; }
+.plan-edit-minutes { display: inline-flex; align-items: center; gap: 6px; }
+.plan-edit-minutes input { width: 64px; padding: 4px 8px; }
+.plan-edit-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+
+.transcript-editor__tools { display: flex; gap: 8px; }
+.transcript-action__message--success { border-color: rgba(79, 209, 164, 0.35); background: rgba(79, 209, 164, 0.08); color: #b6f3d9; }
+.transcript-action__message--error { border-color: rgba(255, 139, 139, 0.4); background: rgba(255, 139, 139, 0.08); color: #ffc2c2; }
+.transcript-action .btn + .btn { margin-top: 8px; }
+
+.profile__danger { border-color: rgba(255, 139, 139, 0.3); }
+.profile__danger p { color: var(--ink-2); font-size: 13px; }
+
+.screening-results__table td small { display: block; color: var(--ink-3); font-size: 11px; }
+
+@media (max-width: 720px) {
+  .transcript-editor__tools { width: 100%; }
+  .transcript-editor__tools .btn { flex: 1; }
+}

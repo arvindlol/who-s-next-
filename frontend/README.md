@@ -1,23 +1,27 @@
-# Who’s Next — interview evaluation frontend
+# Who's Next — web app
 
-React + Vite frontend for the AI-assisted technical interview evaluation system.
-Glass UI, mock login/signup, and a home workspace that mirrors the SRS pipeline.
+React 18 + Vite front end. See the [project README](../README.md) for the architecture, backend and deployment.
 
-## Run locally
-    npm install
-    npm run dev
+```bash
+npm install
+npm run dev              # against the Firebase project in src/firebase.js
+npm run dev:emulators    # against local emulators (see project README)
+npm test                 # unit tests for utils (Node's built-in test runner)
+npm run lint
+npm run build
+```
 
-## Deploy to Firebase Hosting
-    npm install -g firebase-tools
-    firebase login
-    firebase use --add            # pick your Firebase project
-    npm run build
-    firebase deploy --only hosting
+## Structure
 
-`firebase.json` is already set up (public dir = dist, SPA rewrite).
-
-## Where things live
-- `src/auth.jsx`      mock auth — replace signIn/signUp with Firebase Auth
-- `src/pages/Auth.jsx` login + signup (routes /login, /signup)
-- `src/pages/Home.jsx` post-login home (route /)
-- `src/styles.css`    design tokens + glass system
+```
+src/
+  App.jsx                routes (pages are lazy-loaded)
+  auth.jsx               Firebase Auth context (sign in/up, reset password, profile sync)
+  firebase.js            Firebase init, optional emulators and App Check
+  components/            AppLayout (top bar + footer), PasswordInput, ScreeningReportView, Brand
+  constants/statuses.js  candidate stages and interview statuses (mirrors the backend)
+  services/              Firestore/Storage access and callable wrappers (api.js)
+  utils/                 pure helpers: candidate model, CSV, email, transcript, formatting
+  hooks/                 useToasts
+  pages/                 one file per route; pages/candidates/ holds the Candidates page parts
+```

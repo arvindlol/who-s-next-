@@ -6,7 +6,9 @@
     "node": "22"
   },
   "scripts": {
-    "check": "node --check index.js"
+    "test": "node --test \"test/*.test.js\"",
+    "check": "node --check index.js && node -e \"require('./src/lib/plan'); require('./src/lib/report'); require('./src/lib/screening')\"",
+    "migrate": "node scripts/migrate-v2.js"
   },
   "dependencies": {
     "firebase-admin": "^14.5.0",

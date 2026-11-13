@@ -1,12 +1,15 @@
 {
   "name": "interview-eval-frontend",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:emulators": "vite --mode emulators",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "lint": "eslint .",
+    "test": "node --test \"test/*.test.js\""
   },
   "dependencies": {
     "firebase": "^12.19.0",
@@ -15,7 +18,12 @@
     "react-router-dom": "^6.26.2"
   },
   "devDependencies": {
+    "@eslint/js": "^9.30.0",
     "@vitejs/plugin-react": "^4.3.1",
+    "eslint": "^9.30.0",
+    "eslint-plugin-react-hooks": "^5.2.0",
+    "eslint-plugin-react-refresh": "^0.4.20",
+    "globals": "^16.0.0",
     "vite": "^5.4.8"
   }
 }

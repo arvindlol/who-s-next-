@@ -1,38 +1,81 @@
-import { httpsCallable } from 'firebase/functions'
-import { functions } from '../firebase.js'
+import { collection, doc, onSnapshot, orderBy, query, where } from 'firebase/firestore'
+import { db } from '../firebase.js'
+import { api } from './api.js'
+import { callableErrorMessage } from './errorMessages.js'
+import { timestampMs } from '../utils/format.js'
 
-const startInterviewPlanCall = httpsCallable(functions, 'startInterviewPlan')
-const generateInterviewPlanCall = httpsCallable(functions, 'generateInterviewPlan', {
-  timeout: 3_600_000,
-})
-const approveInterviewPlanCall = httpsCallable(functions, 'approveInterviewPlan')
+export const startInterviewPlan = (screeningId, candidateId) => api.startInterviewPlan({ screeningId, candidateId })
+export const generateInterviewPlan = (interviewId, configuration, replaceApproved = false) =>
+  api.generateInterviewPlan({ interviewId, configuration, replaceApproved })
+export const updateInterviewPlan = (interviewId, planVersion, sections, replaceApproved = false) =>
+  api.updateInterviewPlan({ interviewId, planVersion, sections, replaceApproved })
+export const approveInterviewPlan = (interviewId, planVersion) => api.approveInterviewPlan({ interviewId, planVersion })
+export const submitTranscript = input => api.submitTranscript(input)
+export const generateFinalReport = interviewId => api.generateFinalReport({ interviewId })
+export const saveHiringDecision = (interviewId, decision, reason) => api.saveHiringDecision({ interviewId, decision, reason })
 
-export async function startInterviewPlan(screeningId, candidateId) {
-  const response = await startInterviewPlanCall({ screeningId, candidateId })
-  return response.data
+export function interviewErrorMessage(error, fallback = 'Could not complete this interview step. Please try again.') {
+  return callableErrorMessage(error, fallback)
 }
 
-export async function generateInterviewPlan(interviewId, configuration) {
-  const response = await generateInterviewPlanCall({ interviewId, configuration })
-  return response.data
+/** Live single interview owned by the user; calls onMissing when absent or not theirs. */
+export function subscribeToInterview(uid, interviewId, { onChange, onMissing, onError }) {
+  return onSnapshot(
+    doc(db, 'interviews', interviewId),
+    snapshot => {
+      if (!snapshot.exists() || snapshot.get('ownerId') !== uid) onMissing()
+      else onChange({ id: snapshot.id, ...snapshot.data() })
+    },
+    onError,
+  )
 }
 
-export async function approveInterviewPlan(interviewId, planVersion) {
-  const response = await approveInterviewPlanCall({ interviewId, planVersion })
-  return response.data
+/** Live list of the user's interviews, most recently updated first. */
+export function subscribeToInterviews(uid, onChange, onError) {
+  return onSnapshot(
+    query(collection(db, 'interviews'), where('ownerId', '==', uid)),
+    snapshot => onChange(snapshot.docs
+      .map(item => ({ id: item.id, ...item.data() }))
+      .sort((a, b) => timestampMs(b.updatedAt || b.createdAt) - timestampMs(a.updatedAt || a.createdAt))),
+    onError,
+  )
 }
 
-export function interviewErrorMessage(error, fallback = 'Could not prepare this interview. Please try again.') {
-  const code = String(error?.code || '').replace('functions/', '')
-  if (code === 'not-found') {
-    return 'The interview service is not deployed yet. Deploy the new Firebase interview functions and try again.'
-  }
-  if (code === 'failed-precondition' || code === 'invalid-argument' || code === 'permission-denied') {
-    return error?.message || fallback
-  }
-  if (code === 'deadline-exceeded') return 'The request took too long. Please try again.'
-  if (code === 'resource-exhausted') return 'Gemini quota is unavailable right now. Check your API key quota and try again.'
-  if (code === 'unavailable') return error?.message || 'Gemini is temporarily unavailable. Please try again.'
-  if (code === 'data-loss' || code === 'internal') return error?.message || fallback
-  return fallback
+/** Key matching the backend's interview identity (one workspace per job + candidate). */
+export const interviewKey = (jobId, candidateId) => `${jobId}:${candidateId}`
+
+/** Map of `jobId:candidateId` → latest interview, for "already advanced" checks. */
+export function latestInterviewsByCandidate(interviews) {
+  const map = new Map()
+  interviews.forEach(interview => {
+    if (!interview.jobId || !interview.candidateId) return
+    const key = interviewKey(interview.jobId, interview.candidateId)
+    const existing = map.get(key)
+    if (!existing || (interview.round || 1) > (existing.round || 1)) map.set(key, interview)
+  })
+  return map
+}
+
+export function subscribeToTranscript(interviewId, onChange, onError) {
+  return onSnapshot(
+    doc(db, 'interviewTranscripts', interviewId),
+    snapshot => onChange(snapshot.exists() ? snapshot.data() : null),
+    onError,
+  )
+}
+
+export function subscribeToReport(interviewId, onChange, onError) {
+  return onSnapshot(
+    doc(db, 'interviewReports', interviewId),
+    snapshot => onChange(snapshot.exists() ? { id: snapshot.id, ...snapshot.data() } : null),
+    onError,
+  )
+}
+
+export function subscribeToReports(uid, onChange, onError) {
+  return onSnapshot(
+    query(collection(db, 'interviewReports'), where('ownerId', '==', uid), orderBy('generatedAt', 'desc')),
+    snapshot => onChange(snapshot.docs.map(item => ({ id: item.id, ...item.data() }))),
+    onError,
+  )
 }

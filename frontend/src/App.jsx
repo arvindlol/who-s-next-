@@ -1,192 +1,79 @@
-import { Navigate, Route, Routes } from 'react-router-dom'
+import { lazy, Suspense } from 'react'
+import { Navigate, Route, Routes, useParams } from 'react-router-dom'
 import { AuthProvider, useAuth } from './auth.jsx'
 import Backdrop from './components/Backdrop.jsx'
-import Auth from './pages/Auth.jsx'
-import Candidates from './pages/Candidates.jsx'
-import Home from './pages/Home.jsx'
-<<<<<<< HEAD
-import Candidates from './pages/Candidates.jsx'
-=======
-import InterviewsPage from './pages/InterviewsPage.jsx'
-import InterviewPlanPage from './pages/InterviewPlanPage.jsx'
-import InterviewPlanReviewPage from './pages/InterviewPlanReviewPage.jsx'
-import InterviewTranscriptPage from './pages/InterviewTranscriptPage.jsx'
->>>>>>> origin/arvind-dev
-import JobsPage from './pages/JobsPage.jsx'
-import ProfilePage from './pages/ProfilePage.jsx'
-import ScreeningPage from './pages/ScreeningPage.jsx'
-import ScreeningReportPage from './pages/ScreeningReportPage.jsx'
 
-import ReportsPage from './pages/report.jsx'
-function AuthLoading() {
+// Each page is loaded on first visit, so its code (and page-specific CSS) is only fetched when needed.
+const Auth = lazy(() => import('./pages/Auth.jsx'))
+const Home = lazy(() => import('./pages/Home.jsx'))
+const JobsPage = lazy(() => import('./pages/JobsPage.jsx'))
+const Candidates = lazy(() => import('./pages/Candidates.jsx'))
+const ScreeningPage = lazy(() => import('./pages/ScreeningPage.jsx'))
+const ScreeningReportPage = lazy(() => import('./pages/ScreeningReportPage.jsx'))
+const InterviewsPage = lazy(() => import('./pages/InterviewsPage.jsx'))
+const InterviewPlanPage = lazy(() => import('./pages/InterviewPlanPage.jsx'))
+const InterviewPlanReviewPage = lazy(() => import('./pages/InterviewPlanReviewPage.jsx'))
+const InterviewTranscriptPage = lazy(() => import('./pages/InterviewTranscriptPage.jsx'))
+const InterviewReportPage = lazy(() => import('./pages/InterviewReportPage.jsx'))
+const ReportsPage = lazy(() => import('./pages/ReportsPage.jsx'))
+const ProfilePage = lazy(() => import('./pages/ProfilePage.jsx'))
+
+function AppLoading() {
   return (
-    <div
-      style={{
-        minHeight: '100vh',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-      }}
-    >
-      <div className="pill pill--live">
-        <span className="dot" />
-        <span>Loading Who’s Next…</span>
-      </div>
+    <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <div className="pill pill--live"><span className="dot" /><span>Loading Who’s Next…</span></div>
     </div>
   )
 }
 
 function ProtectedRoute({ children }) {
   const { user, loading } = useAuth()
-
-  if (loading) return <AuthLoading />
-
+  if (loading) return <AppLoading />
   return user ? children : <Navigate to="/login" replace />
 }
 
 function PublicRoute({ children }) {
   const { user, loading } = useAuth()
-
-  if (loading) return <AuthLoading />
-
+  if (loading) return <AppLoading />
   return user ? <Navigate to="/" replace /> : children
 }
+
+/** Old report links (/interviews/:id/reports/:candidateId) now live at /interviews/:id/report. */
+function LegacyReportRedirect() {
+  const { interviewId } = useParams()
+  return <Navigate to={`/interviews/${interviewId}/report`} replace />
+}
+
+const protectedRoutes = [
+  ['/', Home],
+  ['/jobs', JobsPage],
+  ['/candidates', Candidates],
+  ['/screening', ScreeningPage],
+  ['/screening/:screeningId/report/:candidateId', ScreeningReportPage],
+  ['/interviews', InterviewsPage],
+  ['/interviews/:interviewId/plan', InterviewPlanPage],
+  ['/interviews/:interviewId/review', InterviewPlanReviewPage],
+  ['/interviews/:interviewId/transcript', InterviewTranscriptPage],
+  ['/interviews/:interviewId/report', InterviewReportPage],
+  ['/reports', ReportsPage],
+  ['/profile', ProfilePage],
+]
 
 export default function App() {
   return (
     <AuthProvider>
       <Backdrop />
-
-      <Routes>
-        <Route
-          path="/login"
-          element={
-            <PublicRoute>
-              <Auth mode="login" />
-            </PublicRoute>
-          }
-        />
-
-        <Route
-          path="/signup"
-          element={
-            <PublicRoute>
-              <Auth mode="signup" />
-            </PublicRoute>
-          }
-        />
-
-        <Route
-          path="/"
-          element={
-            <ProtectedRoute>
-              <Home />
-            </ProtectedRoute>
-          }
-        />
-
-        <Route
-          path="/candidates"
-          element={
-            <ProtectedRoute>
-              <Candidates />
-            </ProtectedRoute>
-          }
-        />
-
-        <Route
-          path="/jobs"
-          element={
-            <ProtectedRoute>
-              <JobsPage />
-            </ProtectedRoute>
-          }
-        />
-
-        <Route
-          path="/candidates"
-          element={
-            <ProtectedRoute>
-              <Candidates />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="/screening"
-          element={
-            <ProtectedRoute>
-              <ScreeningPage />
-            </ProtectedRoute>
-          }
-        />
-
-        <Route
-          path="/screening/:screeningId/report/:candidateId"
-          element={
-            <ProtectedRoute>
-              <ScreeningReportPage />
-            </ProtectedRoute>
-          }
-        />
-
-        <Route
-          path="/interviews"
-          element={
-            <ProtectedRoute>
-              <InterviewsPage />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="/interviews/:interviewId/plan"
-          element={
-            <ProtectedRoute>
-              <InterviewPlanPage />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="/interviews/:interviewId/review"
-          element={
-            <ProtectedRoute>
-              <InterviewPlanReviewPage />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="/interviews/:interviewId/transcript"
-          element={
-            <ProtectedRoute>
-              <InterviewTranscriptPage />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="/profile"
-          element={
-            <ProtectedRoute>
-              <ProfilePage />
-            </ProtectedRoute>
-          }/>
-          <Route
-  path="/reports"
-  element={
-    <ProtectedRoute>
-      <ReportsPage />
-    </ProtectedRoute>
-  }/>
-  <Route
-  path="/interviews/:interviewId/reports/:candidateId"
-  element={
-    <ProtectedRoute>
-      <ReportsPage />
-    </ProtectedRoute>
-  }
-/>
-
-        
-        
-      </Routes>
+      <Suspense fallback={<AppLoading />}>
+        <Routes>
+          <Route path="/login" element={<PublicRoute><Auth mode="login" /></PublicRoute>} />
+          <Route path="/signup" element={<PublicRoute><Auth mode="signup" /></PublicRoute>} />
+          {protectedRoutes.map(([path, Page]) => (
+            <Route key={path} path={path} element={<ProtectedRoute><Page /></ProtectedRoute>} />
+          ))}
+          <Route path="/interviews/:interviewId/reports/:candidateId" element={<ProtectedRoute><LegacyReportRedirect /></ProtectedRoute>} />
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
+      </Suspense>
     </AuthProvider>
   )
 }

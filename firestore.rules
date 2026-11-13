@@ -1,63 +1,180 @@
 rules_version = '2';
 
+// Who's Next — Firestore security rules.
+// Clients may write only their own profile, jobs, candidates and candidate activity, with validated
+// fields. Everything AI-generated or workflow-related (screenings, interviews, transcripts, reports)
+// is written by Cloud Functions (Admin SDK bypasses these rules) and is read-only for its owner.
+
 service cloud.firestore {
   match /databases/{database}/documents {
+
+    // ---------- helpers ----------
     function signedIn() {
       return request.auth != null;
     }
 
-    function ownsUserDocument(userId) {
-      return signedIn() && request.auth.uid == userId;
+    function uid() {
+      return request.auth.uid;
     }
 
-    function validUserIdentity(userId) {
-      return request.resource.data.uid == userId
-        && request.resource.data.email == request.auth.token.email;
+    function ownsExisting() {
+      return signedIn() && resource.data.ownerId == uid();
     }
 
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function ownerUnchanged() {
+      return incoming().ownerId == resource.data.ownerId;
+    }
+
+    function optionalString(data, field, maxLength) {
+      return !(field in data) || data[field] == null || (data[field] is string && data[field].size() <= maxLength);
+    }
+
+    function requiredString(data, field, minLength, maxLength) {
+      return field in data && data[field] is string && data[field].size() >= minLength && data[field].size() <= maxLength;
+    }
+
+    function optionalTimestamp(data, field) {
+      return !(field in data) || data[field] == null || data[field] is timestamp;
+    }
+
+    function optionalNumber(data, field) {
+      return !(field in data) || data[field] is number;
+    }
+
+    function optionalList(data, field, maxSize) {
+      return !(field in data) || (data[field] is list && data[field].size() <= maxSize);
+    }
+
+    // ---------- users ----------
     match /users/{userId} {
-      allow create: if ownsUserDocument(userId) && validUserIdentity(userId);
-      allow read, delete: if ownsUserDocument(userId);
-      allow update: if ownsUserDocument(userId) && validUserIdentity(userId);
+      function validUser() {
+        return incoming().keys().hasOnly(['uid', 'name', 'email', 'createdAt', 'updatedAt'])
+          && incoming().uid == userId
+          && incoming().email == request.auth.token.email
+          && requiredString(incoming(), 'name', 1, 100)
+          && optionalTimestamp(incoming(), 'createdAt')
+          && optionalTimestamp(incoming(), 'updatedAt');
+      }
+
+      allow read, delete: if signedIn() && uid() == userId;
+      allow create, update: if signedIn() && uid() == userId && validUser();
     }
 
+    // ---------- jobs ----------
     match /jobs/{jobId} {
-      allow create: if signedIn()
-        && request.resource.data.ownerId == request.auth.uid;
-      allow read, delete: if signedIn()
-        && resource.data.ownerId == request.auth.uid;
-      allow update: if signedIn()
-        && resource.data.ownerId == request.auth.uid
-        && request.resource.data.ownerId == request.auth.uid;
+      function validJob() {
+        let data = incoming();
+        return data.keys().hasOnly([
+            'ownerId', 'title', 'originalFilename', 'storagePath', 'fileType', 'fileSize',
+            'additionalCriteria', 'status', 'createdAt', 'updatedAt',
+            'closedAt', 'closedBy', 'closeReason', 'fileIssue',
+            'deletedAt', 'deletedBy'
+          ])
+          && data.ownerId == uid()
+          && requiredString(data, 'title', 1, 150)
+          && optionalString(data, 'originalFilename', 255)
+          && requiredString(data, 'storagePath', 1, 500)
+          && data.storagePath.matches('users/' + uid() + '/jobs/' + jobId + '/.+')
+          && optionalString(data, 'fileType', 100)
+          && optionalNumber(data, 'fileSize')
+          && optionalList(data, 'additionalCriteria', 20)
+          && data.status in ['uploading', 'ready', 'failed', 'deleted']
+          && optionalTimestamp(data, 'closedAt')
+          && optionalString(data, 'closedBy', 128)
+          && optionalString(data, 'closeReason', 500);
+      }
+
+      allow read: if ownsExisting();
+      allow create: if signedIn() && validJob() && incoming().status == 'uploading';
+      allow update: if ownsExisting() && ownerUnchanged() && validJob()
+        && incoming().storagePath == resource.data.storagePath
+        && incoming().createdAt == resource.data.createdAt;
+      // Full deletion (file, screenings, interviews) goes through the deleteJob function.
+      allow delete: if ownsExisting();
+    }
+
+    // ---------- candidates ----------
+    match /candidates/{candidateId} {
+      function validCandidate() {
+        let data = incoming();
+        return data.keys().hasOnly([
+            'ownerId', 'name', 'role', 'email', 'phone', 'status', 'skills',
+            'additionalinformation', 'notes',
+            'resume', 'resumeUrl', 'resumeName', 'resumePath',
+            'ratingSum', 'ratingCount',
+            'createdAt', 'updatedAt', 'deletedAt', 'migratedAt'
+          ])
+          && data.ownerId == uid()
+          && requiredString(data, 'name', 1, 100)
+          && optionalString(data, 'role', 150)
+          && optionalString(data, 'email', 254)
+          && optionalString(data, 'phone', 30)
+          && optionalString(data, 'status', 40)
+          && (!('skills' in data) || data.skills is list && data.skills.size() <= 30 || data.skills is string && data.skills.size() <= 1000)
+          && optionalString(data, 'additionalinformation', 3000)
+          && optionalString(data, 'notes', 3000)
+          && optionalString(data, 'resume', 2000)
+          && optionalString(data, 'resumeUrl', 2000)
+          && optionalString(data, 'resumeName', 255)
+          && optionalString(data, 'resumePath', 500)
+          && (!('resumePath' in data) || data.resumePath == '' || data.resumePath.matches('resumes/' + uid() + '/.+'))
+          && optionalNumber(data, 'ratingSum')
+          && optionalNumber(data, 'ratingCount')
+          && optionalTimestamp(data, 'deletedAt');
+      }
+
+      allow read: if ownsExisting();
+      allow create: if signedIn() && validCandidate();
+      allow update: if ownsExisting() && ownerUnchanged() && validCandidate();
+      // Full deletion (resume, interviews, reports, activity) goes through the deleteCandidate function.
+      allow delete: if ownsExisting();
+
+      // Timeline entries: append-only audit trail, readable by the candidate's owner.
+      match /activity/{activityId} {
+        function parentOwner() {
+          return get(/databases/$(database)/documents/candidates/$(candidateId)).data.ownerId;
+        }
+
+        function parentOwnerAfter() {
+          return getAfter(/databases/$(database)/documents/candidates/$(candidateId)).data.ownerId;
+        }
+
+        allow read: if signedIn() && parentOwner() == uid();
+        allow create: if signedIn()
+          && parentOwnerAfter() == uid()
+          && incoming().keys().hasOnly(['type', 'text', 'rating', 'by', 'byUid', 'createdAt'])
+          && incoming().type in ['created', 'edited', 'status', 'resume', 'feedback', 'email', 'note']
+          && optionalString(incoming(), 'text', 3000)
+          && optionalString(incoming(), 'by', 200)
+          && incoming().byUid == uid()
+          && (!('rating' in incoming()) || incoming().rating is int && incoming().rating >= 0 && incoming().rating <= 5)
+          && incoming().createdAt == request.time;
+        allow update, delete: if false;
+      }
+    }
+
+    // ---------- server-written, owner-readable ----------
+    match /screeningReports/{reportId} {
+      allow read: if ownsExisting();
     }
 
     match /interviews/{interviewId} {
-      allow read: if signedIn()
-        && resource.data.ownerId == request.auth.uid;
+      allow read: if ownsExisting();
     }
 
-    match /screeningReports/{reportId} {
-      allow read: if signedIn()
-        && resource.data.ownerId == request.auth.uid;
+    match /interviewTranscripts/{interviewId} {
+      allow read: if ownsExisting();
     }
 
-    match /matches/{matchId} {
-      allow read: if signedIn()
-        && resource.data.ownerId == request.auth.uid;
+    match /interviewReports/{interviewId} {
+      allow read: if ownsExisting();
     }
 
-    match /candidates/{candidateId} {
-      allow create: if signedIn()
-        && request.resource.data.ownerId == request.auth.uid;
-      allow read, delete: if signedIn()
-        && resource.data.ownerId == request.auth.uid;
-      allow update: if signedIn()
-        && resource.data.ownerId == request.auth.uid
-        && request.resource.data.ownerId == request.auth.uid;
-    }
-
-    // Gemini keys are encrypted and managed only by trusted backend functions.
-    // Firebase Admin bypasses these client rules; browsers can never access this collection.
+    // Gemini keys (encrypted), encryption material, rate limits and diagnostics are backend-only.
     match /userSecrets/{userId} {
       allow read, write: if false;
     }
