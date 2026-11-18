@@ -1,278 +1,386 @@
-import { useEffect, useMemo, useState } from 'react'
-import { Link, Navigate, NavLink, useParams } from 'react-router-dom'
-import { doc, onSnapshot } from 'firebase/firestore'
-import Brand from '../components/Brand.jsx'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { Link, useParams } from 'react-router-dom'
+import AppLayout from '../components/AppLayout.jsx'
 import { useAuth } from '../auth.jsx'
-import { db } from '../firebase.js'
-import { interviewErrorMessage, recordInterviewDecision } from '../services/interviews.js'
+import { DECISIONS, INTERVIEW_STATUS, interviewStatusKey } from '../constants/statuses.js'
+import {
+  generateFinalReport,
+  interviewErrorMessage,
+  saveHiringDecision,
+  subscribeToInterview,
+  subscribeToReport,
+  subscribeToTranscript,
+} from '../services/interviews.js'
+import { formatDate, formatDateTime } from '../utils/format.js'
+import './report.css'
 
-const DECISIONS = [
-  'Move to offer',
-  'Move to next stage',
-  'Another interview',
-  'Do not progress',
-]
+const barClass = score => (score >= 4 ? 'is-strong' : 'is-mid')
 
-function scoreLabel(score) {
-  return score === null || score === undefined ? 'Not covered' : `${Number(score).toFixed(1)} / 5`
+const Icon = ({ d }) => (
+  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d={d} />
+  </svg>
+)
+
+function transcriptLines(text) {
+  return String(text || '').split('\n').map(line => line.trim()).filter(Boolean).map(line => {
+    const match = line.match(/^([^:]{1,40}):\s*(.*)$/)
+    return match ? { speaker: match[1], text: match[2] } : { speaker: '', text: line }
+  })
 }
 
-function statusLabel(value) {
-  return String(value || '').replace(/_/g, ' ')
+function TranscriptModal({ title, subtitle, transcript, onClose }) {
+  useEffect(() => {
+    const onKey = event => event.key === 'Escape' && onClose()
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
+
+  const lines = transcriptLines(transcript)
+
+  return (
+    <div className="rp-modal" onMouseDown={event => event.target === event.currentTarget && onClose()}>
+      <section className="rp-modal__card" role="dialog" aria-modal="true" aria-labelledby="rp-tr-title">
+        <div className="rp-modal__head">
+          <div>
+            <h2 id="rp-tr-title" className="rp-h2">{title}</h2>
+            <p className="rp-sub">{subtitle}</p>
+          </div>
+          <button type="button" className="rp-pill rp-pill--sm" onClick={onClose} aria-label="Close transcript">Close</button>
+        </div>
+        <div className="rp-modal__body">
+          {lines.length === 0 ? <p className="rp-sub">No transcript is available for this interview.</p> : lines.map((line, index) => (
+            <div key={index} className="rp-line">
+              {line.speaker && <div className="rp-line__meta"><b>{line.speaker}</b></div>}
+              <p>{line.text}</p>
+            </div>
+          ))}
+        </div>
+      </section>
+    </div>
+  )
+}
+
+function Shell({ children }) {
+  return (
+    <AppLayout mainClassName="page rp-page">
+      <div className="rp-container">{children}</div>
+    </AppLayout>
+  )
 }
 
 export default function InterviewReportPage() {
   const { interviewId } = useParams()
-  const { user, signOut } = useAuth()
-  const [reportDocument, setReportDocument] = useState(null)
-  const [loading, setLoading] = useState(true)
+  const { user } = useAuth()
+  const [interview, setInterview] = useState(null)
+  const [report, setReport] = useState(undefined)
+  const [transcript, setTranscript] = useState(null)
   const [loadError, setLoadError] = useState('')
+  const [showAll, setShowAll] = useState(false)
   const [decision, setDecision] = useState('')
-  const [decisionNote, setDecisionNote] = useState('')
-  const [savingDecision, setSavingDecision] = useState(false)
-  const [decisionMessage, setDecisionMessage] = useState('')
-  const initials = (user?.name || 'U').slice(0, 2).toUpperCase()
+  const [reason, setReason] = useState('')
+  const [formReady, setFormReady] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [generating, setGenerating] = useState(false)
+  const [showTranscript, setShowTranscript] = useState(false)
+  const [toast, setToast] = useState('')
 
   useEffect(() => {
     if (!user?.uid || !interviewId) return undefined
-    return onSnapshot(
-      doc(db, 'interviewReports', interviewId),
-      snapshot => {
-        if (!snapshot.exists() || snapshot.get('ownerId') !== user.uid) {
-          setLoadError('This final interview report could not be found.')
-          setLoading(false)
-          return
-        }
-        const next = { id: snapshot.id, ...snapshot.data() }
-        setReportDocument(next)
-        if (next.humanDecision) {
-          setDecision(next.humanDecision.decision || '')
-          setDecisionNote(next.humanDecision.note || '')
-        }
-        setLoadError('')
-        setLoading(false)
-      },
-      error => {
-        console.error('Could not load interview report:', error)
-        setLoadError('Could not load this final report. Please try again.')
-        setLoading(false)
-      },
-    )
+    const stops = [
+      subscribeToInterview(user.uid, interviewId, {
+        onChange: setInterview,
+        onMissing: () => setLoadError('This interview could not be found.'),
+        onError: () => setLoadError('Could not load this interview. Please try again.'),
+      }),
+      subscribeToReport(interviewId, setReport, error => {
+        console.error('Could not load the report:', error)
+        setReport(null)
+      }),
+      subscribeToTranscript(interviewId, data => setTranscript(data?.transcript || ''), () => setTranscript('')),
+    ]
+    return () => stops.forEach(stop => stop())
   }, [interviewId, user?.uid])
 
-  const report = reportDocument?.report
-  const groupedQuestions = useMemo(() => {
-    const groups = new Map()
-    ;(report?.questions || []).forEach(question => {
-      if (!groups.has(question.area)) groups.set(question.area, [])
-      groups.get(question.area).push(question)
-    })
-    return [...groups.entries()]
-  }, [report?.questions])
+  // Pre-fill the decision form from the saved decision once.
+  useEffect(() => {
+    if (formReady || report === undefined) return
+    if (report?.decision) {
+      setDecision(report.decision.value)
+      setReason(report.decision.reason || '')
+    }
+    setFormReady(true)
+  }, [report, formReady])
 
-  const saveDecision = async event => {
-    event.preventDefault()
-    if (!decision || savingDecision) return
-    setSavingDecision(true)
-    setDecisionMessage('')
+  useEffect(() => {
+    if (!toast) return undefined
+    const timer = setTimeout(() => setToast(''), 2800)
+    return () => clearTimeout(timer)
+  }, [toast])
+
+  const handleShare = useCallback(async () => {
+    const url = window.location.href
     try {
-      await recordInterviewDecision(interviewId, decision, decisionNote)
-      setDecisionMessage('Recruiter decision saved.')
+      await navigator.clipboard.writeText(url)
+      setToast('Link copied — only you can open it while signed in')
+    } catch {
+      setToast('Could not copy the link')
+    }
+  }, [])
+
+  const handleDownload = useCallback(() => {
+    const previousTitle = document.title
+    document.title = `Interview report - ${report?.candidateName || 'candidate'}`
+    window.print()
+    document.title = previousTitle
+  }, [report?.candidateName])
+
+  const rows = useMemo(() => {
+    const questions = report?.questions || []
+    return showAll ? questions : questions.slice(0, 6)
+  }, [report?.questions, showAll])
+
+  if (loadError) {
+    return (
+      <Shell>
+        <div className="workflow-notice" role="alert"><b>Report unavailable</b><span>{loadError}</span><Link className="btn btn--small" to="/reports">All reports</Link></div>
+      </Shell>
+    )
+  }
+
+  if (!interview || report === undefined) {
+    return <Shell><p className="rp-sub">Loading report…</p></Shell>
+  }
+
+  const status = interviewStatusKey(interview.status)
+
+  if (!report) {
+    const canGenerate = status === INTERVIEW_STATUS.TRANSCRIPT_SUBMITTED
+    const running = generating || interview.reportGeneration?.status === 'running'
+    const generate = async () => {
+      setGenerating(true)
+      try {
+        await generateFinalReport(interviewId)
+      } catch (error) {
+        setToast(interviewErrorMessage(error, 'The report could not be generated.'))
+      } finally {
+        setGenerating(false)
+      }
+    }
+    return (
+      <Shell>
+        <div className="workflow-notice" role="note">
+          <b>No final report yet</b>
+          <span>{canGenerate ? 'The transcript is saved. Generate the report to see scores and evidence.' : 'Add the interview transcript first.'}</span>
+          {canGenerate ? (
+            <button type="button" className="btn btn--small btn--primary" onClick={generate} disabled={running}>{running ? 'Generating…' : 'Generate report'}</button>
+          ) : (
+            <Link className="btn btn--small" to={`/interviews/${interviewId}/transcript`}>Add transcript</Link>
+          )}
+        </div>
+        {toast && <div className="rp-toast" role="status" aria-live="polite">{toast}</div>}
+      </Shell>
+    )
+  }
+
+  const saved = report.decision
+  const savedLabel = saved ? DECISIONS.find(item => item.value === saved.value)?.label : ''
+  const unchanged = saved && saved.value === decision && (saved.reason || '') === reason.trim()
+  const notAsked = report.questions.filter(question => !question.asked)
+  const scoredAreas = report.areaScores.filter(area => area.score !== null)
+
+  const handleSave = async () => {
+    if (!decision || saving) return
+    setSaving(true)
+    try {
+      await saveHiringDecision(interviewId, decision, reason.trim())
+      setToast('Decision saved')
     } catch (error) {
-      console.error('Could not save recruiter decision:', error)
-      setDecisionMessage(interviewErrorMessage(error, 'Could not save the recruiter decision. Please try again.'))
+      setToast(interviewErrorMessage(error, 'Could not save the decision. Please try again.'))
     } finally {
-      setSavingDecision(false)
+      setSaving(false)
     }
   }
 
-  if (loading) {
-    return <div className="report-page"><main className="screening-report glass glass--strong report-state">Loading final interview report…</main></div>
-  }
-
-  if (loadError || !reportDocument) {
-    return (
-      <div className="report-page">
-        <main className="screening-report glass glass--strong report-state">
-          <h1>Report unavailable</h1><p>{loadError}</p>
-          <Link className="btn btn--primary" to={`/interviews/${interviewId}/transcript`}>Back to transcript</Link>
-        </main>
-      </div>
-    )
-  }
-
-  if (reportDocument.status === 'queued' || reportDocument.status === 'generating') {
-    return <Navigate replace to={`/interviews/${interviewId}/transcript`} />
-  }
-
-  if (reportDocument.status === 'failed' || !report) {
-    return (
-      <div className="report-page">
-        <main className="screening-report glass glass--strong report-state">
-          <h1>Report generation stopped</h1>
-          <p>{reportDocument.error?.message || 'The report could not be generated. Return to the transcript and try again.'}</p>
-          <Link className="btn btn--primary" to={`/interviews/${interviewId}/transcript`}>Return to transcript</Link>
-        </main>
-      </div>
-    )
-  }
-
   return (
-    <div className="shell">
-      <header className="topbar glass glass--strong">
-        <Brand />
-        <nav>
-          <NavLink to="/" end>Overview</NavLink><NavLink to="/jobs">Jobs</NavLink><NavLink to="/candidates">Candidates</NavLink>
-          <NavLink to="/screening">Screening</NavLink><NavLink to="/interviews">Interviews</NavLink><NavLink to="/reports">Reports</NavLink>
-        </nav>
-        <span className="spacer" />
-        <NavLink to="/profile" className="avatar" title={user?.email}>{initials}</NavLink>
-        <button className="btn btn--ghost" onClick={signOut}>Log out</button>
+    <Shell>
+      <nav className="rp-crumbs" aria-label="Breadcrumb">
+        <Link to="/reports">Reports</Link> / <span>{report.candidateName}</span> / <span>Final report</span>
+      </nav>
+
+      <header className="rp-header">
+        <div className="rp-header__text">
+          <div className="rp-title-row">
+            <h1 className="rp-title">Final interview report</h1>
+            <span className="rp-status">
+              <i className={`rp-status__dot ${saved ? 'is-done' : ''}`} />
+              {saved ? `Decision: ${savedLabel}` : 'Awaiting your decision'}
+            </span>
+          </div>
+          <p className="rp-meta">
+            {report.candidateName} · {report.role || report.jobTitle}{report.round > 1 ? ` · Round ${report.round}` : ''} · Transcript added {formatDate(report.interviewedAt)} · Report generated by {report.model || 'Gemini'} {formatDateTime(report.generatedAt)}
+          </p>
+        </div>
+        <div className="rp-actions rp-no-print">
+          <button type="button" className="rp-pill" onClick={handleDownload}><Icon d="M12 3v12m0 0l-4-4m4 4l4-4M4 19h16" /> Download PDF</button>
+          <button type="button" className="rp-pill" onClick={handleShare}><Icon d="M12 15V3m0 0L8 7m4-4l4 4M5 12v7h14v-7" /> Copy link</button>
+          <button type="button" className="rp-pill" onClick={() => setShowTranscript(true)}>View transcript</button>
+        </div>
       </header>
 
-      <main className="page interview-report-page">
-        <Link className="interview-plan__back" to="/interviews">← Interviews</Link>
-
-        <header className="interview-report__head">
-          <div>
-            <span className="eyebrow">Final interview report</span>
-            <h1>{reportDocument.candidateName}</h1>
-            <p>{reportDocument.jobTitle} · Plan v{reportDocument.sourcePlanVersion} · Transcript v{reportDocument.sourceTranscriptVersion}</p>
-          </div>
-          <div className="interview-report__score" aria-label={`Overall score ${scoreLabel(report.overallScore)}`}>
-            <strong>{report.overallScore === null ? '—' : Number(report.overallScore).toFixed(1)}</strong>
-            <span>Overall score</span>
-          </div>
-        </header>
-
-        <section className="interview-report__overview">
-          <article className="glass glass--lg report-advisory">
-            <span className="eyebrow">AI suggestion · Advisory only</span>
-            <h2>{report.aiSuggestion.decision}</h2>
-            <p>{report.aiSuggestion.reason}</p>
-            <small>The recruiter remains responsible for the hiring decision.</small>
-          </article>
-          <article className="glass glass--lg report-metric">
-            <span>Plan coverage</span>
-            <strong>{report.planCoverage.covered} of {report.planCoverage.total}</strong>
-            <small>{report.planCoverage.notCoveredQuestions.length === 0 ? 'Every planned question was covered' : `${report.planCoverage.notCoveredQuestions.length} question(s) not covered`}</small>
-          </article>
-          <article className="glass glass--lg report-metric">
-            <span>Evidence strength</span>
-            <strong>{report.evidenceStrength.level}</strong>
-            <small>{report.evidenceStrength.reason}</small>
-          </article>
-        </section>
-
-        <section className="glass glass--lg interview-report__summary">
-          <span className="eyebrow">Hiring-manager summary</span>
-          <p>{report.summary}</p>
-        </section>
-
-        <div className="interview-report__columns">
-          <section className="interview-report__main">
-            <section>
-              <div className="section__head"><h2>Topic and area scores</h2></div>
-              <div className="report-area-grid">
-                {report.scoresByArea.map(area => (
-                  <article className="glass glass--lg" key={area.area}>
-                    <span>{area.area}</span><strong>{scoreLabel(area.score)}</strong><small>{statusLabel(area.status)}</small>
-                  </article>
-                ))}
-              </div>
-            </section>
-
-            <section className="report-question-section">
-              <div className="section__head"><h2>Question-by-question evaluation</h2></div>
-              {groupedQuestions.map(([area, questions]) => (
-                <section className="report-question-group" key={area}>
-                  <h3>{area}</h3>
-                  {questions.map(question => (
-                    <article className="glass glass--lg report-question" key={question.number}>
-                      <span className="generated-plan__number">{question.number}</span>
-                      <div>
-                        <div className="report-question__head">
-                          <span>{question.topic}</span><b>{scoreLabel(question.score)}</b>
-                        </div>
-                        {question.status === 'not_covered' ? (
-                          <p className="report-question__empty">This planned question was not covered, so it was not scored.</p>
-                        ) : (
-                          <>
-                            <p>{question.whatTheySaid}</p>
-                            {question.evidenceQuotes.map(quote => <blockquote key={quote}>“{quote}”</blockquote>)}
-                            <div className="report-question__guide">
-                              <div><b>Guide points evidenced</b><ul>{question.pointsHit.map(point => <li key={point}>{point}</li>)}</ul></div>
-                              <div><b>Guide points missing</b><ul>{question.pointsMissed.map(point => <li key={point}>{point}</li>)}</ul></div>
-                            </div>
-                          </>
-                        )}
-                      </div>
-                    </article>
-                  ))}
-                </section>
-              ))}
-            </section>
-          </section>
-
-          <aside className="interview-report__sidebar">
-            <section className="glass glass--lg report-list-card">
-              <span className="eyebrow">Strengths</span>
-              {report.strengths.length === 0 ? <p>No clear strengths were evidenced.</p> : report.strengths.map(item => (
-                <article key={`${item.title}-${item.question}`}><h3>{item.title}</h3><p>{item.description}</p><blockquote>“{item.quote}”</blockquote><small>Question {item.question}</small></article>
-              ))}
-            </section>
-
-            <section className="glass glass--lg report-list-card report-list-card--concerns">
-              <span className="eyebrow">Concerns and follow-ups</span>
-              {report.concerns.length === 0 ? <p>No material concerns identified.</p> : report.concerns.map(item => (
-                <article key={item.title}><h3>{item.title}</h3><p>{item.explanation}</p><small>Follow-up: {item.suggestedFollowUp}</small></article>
-              ))}
-            </section>
-
-            <section className="glass glass--lg report-list-card">
-              <span className="eyebrow">Critical topics</span>
-              {report.criticalTopicChecks.map(item => (
-                <article key={item.topic}><h3>{item.topic}</h3><p>{scoreLabel(item.score)} · {statusLabel(item.status)}</p>{item.evidenceQuote && <blockquote>“{item.evidenceQuote}”</blockquote>}</article>
-              ))}
-            </section>
-
-            {report.resumeProbeResults.length > 0 && (
-              <section className="glass glass--lg report-list-card">
-                <span className="eyebrow">Resume points checked</span>
-                {report.resumeProbeResults.map(item => (
-                  <article key={item.point}><h3>{item.point}</h3><p>{item.finding}</p><small>{statusLabel(item.status)} · Questions {item.questionNumbers.join(', ')}</small></article>
-                ))}
-              </section>
-            )}
-
-            {report.interviewerNoteObservations.length > 0 && (
-              <section className="glass glass--lg report-list-card report-note-context">
-                <span className="eyebrow">Recruiter-note context · Unscored</span>
-                {report.interviewerNoteObservations.map((item, index) => (
-                  <article key={`${item.observation}-${index}`}><p>{item.observation}</p><small>Follow-up: {item.followUp}</small></article>
-                ))}
-              </section>
-            )}
-
-            <section className="glass glass--lg report-list-card">
-              <span className="eyebrow">Data-quality warnings</span>
-              {report.dataQualityFlags.length === 0 ? <p>No reliability warnings identified.</p> : <ul>{report.dataQualityFlags.map(flag => <li key={flag}>{flag}</li>)}</ul>}
-            </section>
-
-            <form className="glass glass--lg recruiter-decision" onSubmit={saveDecision}>
-              <span className="eyebrow">Human recruiter decision</span>
-              <h2>Record your decision</h2>
-              <p>This is the final human decision and remains separate from the AI suggestion.</p>
-              <label><span>Decision</span><select value={decision} onChange={event => setDecision(event.target.value)} required><option value="">Choose a decision</option>{DECISIONS.map(item => <option key={item}>{item}</option>)}</select></label>
-              <label><span>Decision note (optional)</span><textarea value={decisionNote} onChange={event => setDecisionNote(event.target.value)} maxLength="1000" placeholder="Add the job-related reason for your decision." /></label>
-              <button className="btn btn--primary" disabled={!decision || savingDecision}>{savingDecision ? 'Saving…' : reportDocument.humanDecision ? 'Update decision' : 'Save decision'}</button>
-              {decisionMessage && <div className="transcript-action__message" role="status">{decisionMessage}</div>}
-            </form>
-          </aside>
+      <section className="rp-kpis">
+        <div className="rp-card rp-kpi">
+          <span className="rp-kpi__label">Overall score</span>
+          <span className="rp-kpi__big">{report.overallScore == null ? '–' : report.overallScore.toFixed(1)}<small> / 5</small></span>
+          <span className="rp-kpi__note">Average of {scoredAreas.length} scored area{scoredAreas.length === 1 ? '' : 's'}</span>
         </div>
-      </main>
+        <div className="rp-card rp-kpi rp-kpi--ai">
+          <span className="rp-kpi__label">AI suggestion <em className="rp-badge">Advisory</em></span>
+          <span className="rp-kpi__mid rp-text-mint">{report.suggestion.label}</span>
+          <span className="rp-kpi__note">{report.suggestion.note}</span>
+        </div>
+        <div className="rp-card rp-kpi">
+          <span className="rp-kpi__label">Plan coverage</span>
+          <span className="rp-kpi__big">{report.askedQuestions}<small> / {report.plannedQuestions} questions</small></span>
+          <span className="rp-kpi__note">{notAsked.length ? `${notAsked.map(question => `Q${question.number}`).join(', ')} not asked` : 'All planned questions were asked'}</span>
+        </div>
+        <div className="rp-card rp-kpi">
+          <span className="rp-kpi__label">Evidence strength</span>
+          <span className="rp-kpi__mid">{report.evidenceStrength.level}</span>
+          <span className="rp-kpi__note">{report.evidenceStrength.note}</span>
+        </div>
+      </section>
 
-      <footer className="footer">AI-generated interview support · Evidence must be reviewed by a human recruiter.</footer>
-    </div>
+      <section className="rp-card rp-pad">
+        <h2 className="rp-h2">Summary</h2>
+        <p className="rp-summary">{report.summary}</p>
+      </section>
+
+      <section className="rp-grid">
+        <div className="rp-card rp-pad rp-scores">
+          <h2 className="rp-h2">Scores by area</h2>
+          <ul className="rp-score-list">
+            {report.areaScores.map(area => (
+              <li key={area.area} className="rp-score">
+                <div className="rp-score__row">
+                  <span>{area.area}</span>
+                  {area.score == null ? <span className="rp-score__na">Not covered</span> : <span className="rp-score__val">{area.score} / 5</span>}
+                </div>
+                <div className="rp-bar" role="progressbar" aria-valuemin={0} aria-valuemax={5} aria-valuenow={area.score ?? 0} aria-label={area.area}>
+                  <span className={`rp-bar__fill ${area.score == null ? 'is-na' : barClass(area.score)}`} style={{ width: area.score == null ? '4%' : `${(area.score / 5) * 100}%` }} />
+                </div>
+              </li>
+            ))}
+          </ul>
+          <p className="rp-scale">Scale: 1 = no evidence · 3 = meets the role · 5 = strong, with examples</p>
+        </div>
+
+        <div className="rp-stack">
+          <div className="rp-card rp-pad">
+            <h2 className="rp-h2 rp-text-mint">Strengths</h2>
+            {report.strengths.length === 0 ? <p className="rp-sub">No specific strengths were identified.</p> : report.strengths.map(item => (
+              <article key={item.title} className="rp-item">
+                <h3>{item.title}</h3>
+                <p>{item.text}</p>
+                {item.quote && <blockquote className="rp-quote">“{item.quote}” {item.questionNumber && <span>Q{item.questionNumber}</span>}</blockquote>}
+              </article>
+            ))}
+          </div>
+          <div className="rp-card rp-pad rp-card--warn">
+            <h2 className="rp-h2 rp-text-amber">Concerns &amp; follow-ups</h2>
+            {report.concerns.length === 0 ? <p className="rp-sub">No specific concerns were identified.</p> : report.concerns.map(item => (
+              <article key={item.title} className="rp-item">
+                <h3>{item.title}</h3>
+                <p>{item.text}</p>
+                {item.followUpQuestion && <p className="rp-ask">Ask: “{item.followUpQuestion}”</p>}
+              </article>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      <section className="rp-card rp-pad">
+        <div className="rp-qhead">
+          <h2 className="rp-h2">Question by question</h2>
+          {report.questions.length > 6 && (
+            <button type="button" className="rp-pill rp-pill--sm rp-no-print" onClick={() => setShowAll(value => !value)}>
+              {showAll ? 'Show less' : `Show all ${report.questions.length}`}
+            </button>
+          )}
+        </div>
+        <div className="rp-table-wrap">
+          <table className="rp-table">
+            <thead><tr><th>Q</th><th>Area</th><th>Score</th><th>What they said</th></tr></thead>
+            <tbody>
+              {rows.map(question => (
+                <tr key={question.questionId || question.number}>
+                  <td className="rp-table__q">Q{question.number}</td>
+                  <td>{question.topic}</td>
+                  <td className="rp-table__score">{question.score == null ? (question.asked ? 'n/s' : '—') : `${question.score} / 5`}</td>
+                  <td className="rp-table__said">
+                    {question.evidence}
+                    {question.quote && <span className="rp-table__quote">“{question.quote}”</span>}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <p className="rp-scale">n/s = asked but not scorable. Quotes are shown only when they match the transcript word for word.</p>
+      </section>
+
+      <section className="rp-card rp-card--decision rp-pad rp-no-print">
+        <h2 className="rp-h2">Your decision</h2>
+        <p className="rp-sub">AI scores are advisory. Your decision and reason are saved with your name, and the candidate’s stage is updated.</p>
+
+        <div className="rp-radios" role="radiogroup" aria-label="Decision">
+          {DECISIONS.map(item => (
+            <label key={item.value} className={`rp-radio ${decision === item.value ? 'is-on' : ''}`}>
+              <input type="radio" name="decision" value={item.value} checked={decision === item.value} onChange={() => setDecision(item.value)} />
+              <span className="rp-radio__dot" />
+              {item.label}
+            </label>
+          ))}
+        </div>
+
+        <label className="rp-label" htmlFor="rp-reason">Reason</label>
+        <textarea id="rp-reason" className="rp-textarea" rows={3} maxLength={2000} value={reason} onChange={event => setReason(event.target.value)} placeholder="e.g. Strong on the core skills. Book a short call to cover the gaps before an offer." />
+
+        <div className="rp-save-row">
+          <button type="button" className="rp-save" onClick={handleSave} disabled={!decision || saving || Boolean(unchanged)}>
+            {saving ? 'Saving…' : unchanged ? 'Decision saved' : saved ? 'Update decision' : 'Save decision'}
+          </button>
+          {saved && <span className="rp-saved-note">Saved {formatDateTime(saved.decidedAt)} by {saved.decidedByName || 'you'}</span>}
+        </div>
+
+        {decision === 'another' && saved?.value === 'another' && (
+          <p className="rp-sub">To plan the next round, open the candidate’s screening and choose “Advance to interview” again.</p>
+        )}
+
+        {Array.isArray(report.decisionHistory) && report.decisionHistory.length > 1 && (
+          <details className="rp-history">
+            <summary>Decision history ({report.decisionHistory.length})</summary>
+            <ol>
+              {[...report.decisionHistory].reverse().map((entry, index) => (
+                <li key={index}>
+                  <b>{entry.label}</b> · {formatDateTime(entry.decidedAt)} · {entry.decidedByName}
+                  {entry.reason && <p>{entry.reason}</p>}
+                </li>
+              ))}
+            </ol>
+          </details>
+        )}
+      </section>
+
+      {showTranscript && (
+        <TranscriptModal
+          title="Interview transcript"
+          subtitle={`${report.candidateName} · ${report.jobTitle}`}
+          transcript={transcript}
+          onClose={() => setShowTranscript(false)}
+        />
+      )}
+      {toast && <div className="rp-toast" role="status" aria-live="polite">{toast}</div>}
+    </Shell>
   )
 }

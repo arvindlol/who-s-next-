@@ -1,33 +1,34 @@
 rules_version = '2';
 
+// Who's Next — Storage security rules.
+// Only PDFs up to 10 MB can be uploaded, because screening and interview planning read PDFs only.
+// Existing non-PDF files can still be read and deleted by their owner.
+
 service firebase.storage {
   match /b/{bucket}/o {
-    match /users/{userId}/jobs/{jobId}/{fileName} {
-      allow read, delete: if request.auth != null && request.auth.uid == userId;
-      allow create, update: if request.auth != null
-        && request.auth.uid == userId
-        && request.resource.size <= 10 * 1024 * 1024
-        && (
-          request.resource.contentType == 'application/pdf'
-          || request.resource.contentType == 'application/msword'
-          || request.resource.contentType == 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
-          || request.resource.contentType == 'text/plain'
-          || request.resource.contentType == 'application/octet-stream'
-        );
+    function isOwner(userId) {
+      return request.auth != null && request.auth.uid == userId;
     }
 
-    match /resumes/{userId}/{fileName} {
-      allow read, delete: if request.auth != null && request.auth.uid == userId;
-      allow create, update: if request.auth != null
-        && request.auth.uid == userId
+    function isPdfUpload() {
+      return request.resource.size > 0
         && request.resource.size <= 10 * 1024 * 1024
-        && (
-          request.resource.contentType == 'application/pdf'
-          || request.resource.contentType == 'application/msword'
-          || request.resource.contentType == 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
-          || request.resource.contentType == 'text/plain'
-          || request.resource.contentType == 'application/octet-stream'
-        );
+        && request.resource.contentType == 'application/pdf';
+    }
+
+    // Job descriptions: users/{uid}/jobs/{jobId}/{file}.pdf
+    match /users/{userId}/jobs/{jobId}/{fileName} {
+      allow read, delete: if isOwner(userId);
+      allow create, update: if isOwner(userId) && isPdfUpload();
+    }
+
+    // Resumes: resumes/{uid}/{candidateId}-{timestamp}-{file}.pdf
+    // (candidate IDs are 20-character Firestore auto-IDs)
+    match /resumes/{userId}/{fileName} {
+      allow read, delete: if isOwner(userId);
+      allow create, update: if isOwner(userId)
+        && isPdfUpload()
+        && fileName.matches('[A-Za-z0-9]{20}-.+');
     }
   }
 }

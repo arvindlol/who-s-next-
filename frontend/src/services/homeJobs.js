@@ -1,52 +1,36 @@
 import { collection, onSnapshot, query, where } from 'firebase/firestore'
 import { db } from '../firebase.js'
+import { timestampMs } from '../utils/format.js'
 
-function timestampValue(timestamp) {
-  return timestamp?.toMillis?.() || 0
-}
-
+/**
+ * The three most recent ready jobs with:
+ *  - candidateCount: distinct candidates screened for the job
+ *  - workflowStatus: New / In progress / Completed
+ */
 export function subscribeToHomeJobs(userId, onChange, onReady, onError) {
-  const data = {
-    jobs: [],
-    matches: [],
-    screeningReports: [],
-    interviews: [],
-  }
-  const pendingSources = new Set(Object.keys(data))
+  const data = { jobs: [], screeningReports: [], interviews: [] }
+  const pending = new Set(Object.keys(data))
 
   const emit = () => {
-    const candidateIdsByJob = new Map()
+    const candidatesByJob = new Map()
+    data.screeningReports
+      .filter(report => (report.status || 'completed') === 'completed')
+      .forEach(report => {
+        if (!report.jobId) return
+        if (!candidatesByJob.has(report.jobId)) candidatesByJob.set(report.jobId, new Set())
+        ;(report.candidateIds || []).forEach(id => candidatesByJob.get(report.jobId).add(id))
+      })
+    const interviewJobIds = new Set(data.interviews.map(interview => interview.jobId))
 
-    data.matches.forEach(match => {
-      if (!match.jobId) return
-      const candidateKey = match.candidateId || match.resumeId || match.id
-      if (!candidateIdsByJob.has(match.jobId)) candidateIdsByJob.set(match.jobId, new Set())
-      candidateIdsByJob.get(match.jobId).add(candidateKey)
-    })
-
-    const reportJobIds = new Set(
-      data.screeningReports
-        .filter(report => !report.status || report.status.toLowerCase() === 'completed')
-        .map(report => report.jobId),
-    )
-    const interviewJobIds = new Set(
-      data.interviews
-        .filter(interview => interview.status?.toLowerCase() === 'scheduled')
-        .map(interview => interview.jobId),
-    )
-
-    const jobs = data.jobs
+    onChange(data.jobs
       .filter(job => job.status === 'ready')
-      .sort((a, b) => timestampValue(b.createdAt) - timestampValue(a.createdAt))
+      .sort((a, b) => timestampMs(b.createdAt) - timestampMs(a.createdAt))
       .slice(0, 3)
       .map(job => {
-        const hasActivity = candidateIdsByJob.has(job.id)
-          || reportJobIds.has(job.id)
-          || interviewJobIds.has(job.id)
+        const candidateCount = candidatesByJob.get(job.id)?.size || 0
         let workflowStatus = 'New'
         let statusTone = 'live'
-
-        if (hasActivity) {
+        if (candidateCount || interviewJobIds.has(job.id)) {
           workflowStatus = 'In progress'
           statusTone = 'warn'
         }
@@ -54,39 +38,25 @@ export function subscribeToHomeJobs(userId, onChange, onReady, onError) {
           workflowStatus = 'Completed'
           statusTone = 'ok'
         }
-
-        return {
-          ...job,
-          candidateCount: candidateIdsByJob.get(job.id)?.size || 0,
-          workflowStatus,
-          statusTone,
-        }
-      })
-
-    onChange(jobs)
+        return { ...job, candidateCount, workflowStatus, statusTone }
+      }))
   }
 
-  const watch = (key, collectionName) => onSnapshot(
-    query(collection(db, collectionName), where('ownerId', '==', userId)),
+  const watch = key => onSnapshot(
+    query(collection(db, key), where('ownerId', '==', userId)),
     snapshot => {
       data[key] = snapshot.docs.map(item => ({ id: item.id, ...item.data() }))
-      pendingSources.delete(key)
+      pending.delete(key)
       emit()
-      if (pendingSources.size === 0) onReady()
+      if (pending.size === 0) onReady()
     },
     error => {
-      pendingSources.delete(key)
+      pending.delete(key)
       onError(error)
-      if (pendingSources.size === 0) onReady()
+      if (pending.size === 0) onReady()
     },
   )
 
-  const unsubscribers = [
-    watch('jobs', 'jobs'),
-    watch('matches', 'matches'),
-    watch('screeningReports', 'screeningReports'),
-    watch('interviews', 'interviews'),
-  ]
-
+  const unsubscribers = Object.keys(data).map(watch)
   return () => unsubscribers.forEach(unsubscribe => unsubscribe())
 }
