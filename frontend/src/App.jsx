@@ -8,6 +8,7 @@ import InterviewsPage from './pages/InterviewsPage.jsx'
 import InterviewPlanPage from './pages/InterviewPlanPage.jsx'
 import InterviewPlanReviewPage from './pages/InterviewPlanReviewPage.jsx'
 import InterviewTranscriptPage from './pages/InterviewTranscriptPage.jsx'
+import InterviewReportPage from './pages/InterviewReportPage.jsx'
 import JobsPage from './pages/JobsPage.jsx'
 import ProfilePage from './pages/ProfilePage.jsx'
 import ScreeningPage from './pages/ScreeningPage.jsx'
@@ -133,6 +134,14 @@ export default function App() {
           element={
             <ProtectedRoute>
               <InterviewTranscriptPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/interviews/:interviewId/report"
+          element={
+            <ProtectedRoute>
+              <InterviewReportPage />
             </ProtectedRoute>
           }
         />

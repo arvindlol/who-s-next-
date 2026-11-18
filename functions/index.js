@@ -12,7 +12,8 @@ const GEMINI_MODELS_URL =
   'https://generativelanguage.googleapis.com/v1beta/models?pageSize=1'
 const GEMINI_SCREENING_MODEL = 'gemini-3.8-flash'
 const GEMINI_INTERVIEW_MODEL = 'gemini-3.7-flash'
-const INTERVIEW_PLAN_PROMPT_VERSION = 'interview-plan-structured-v2'
+const INTERVIEW_PLAN_PROMPT_VERSION = 'interview-plan-structured-v3'
+const INTERVIEW_REPORT_PROMPT_VERSION = 'interview-report-structured-v2'
 const REQUEST_TIMEOUT_MS = 10_000
 const GEMINI_GENERATION_TIMEOUT_MS = 90_000
 const GEMINI_MAX_ATTEMPTS = 4
@@ -31,7 +32,6 @@ const SCREENING_FUNCTION_OPTIONS = {
   timeoutSeconds: 3_600,
   memory: '512MiB',
 }
-
 const INTERVIEW_LENGTHS = {
   30: { questionCount: 8 },
   45: { questionCount: 11 },
@@ -50,6 +50,12 @@ const LEGACY_INTERVIEW_QUESTION_TYPES = {
   behavioral: 'behavioural',
   work_approach: 'values',
 }
+const INTERVIEW_REPORT_DECISIONS = new Set([
+  'Move to offer',
+  'Move to next stage',
+  'Another interview',
+  'Do not progress',
+])
 
 function requireSignedIn(request) {
   if (!request.auth) {
@@ -695,7 +701,11 @@ async function recordGeminiFailure({
 
 function geminiError(failure, operation, attempts = GEMINI_MAX_ATTEMPTS, diagnosticId = null) {
   const status = failure?.httpStatus
-  const operationLabel = operation === 'interview_plan' ? 'interview plan' : operation
+  const operationLabels = {
+    interview_plan: 'interview plan',
+    interview_report: 'interview report',
+  }
+  const operationLabel = operationLabels[operation] || operation
   const details = {
     provider: 'gemini',
     category: failure?.category || 'unknown',
@@ -1264,13 +1274,16 @@ function validateInterviewPlan(value, configuration) {
   }
 
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     title: interviewPlanText(value.title, 'a plan title', 240),
     totalQuestions: expectedCount,
     totalMinutes,
     sections,
     resumePointsToProbe,
     topicCoverage,
+    // Recruiters explicitly select these topics in the plan settings. Keeping
+    // them on the approved plan makes the report's critical checks auditable.
+    criticalTopics: [...configuration.topics],
     allTopicsCovered: true,
   }
 }
@@ -1311,8 +1324,9 @@ function buildInterviewPlanPrompt(interview, _screeningResult, configuration) {
     '5. Order questions from easier to harder within each section. Start with a comfortable, role-relevant question.',
     '6. For every question provide: topic, type, minutes, exact question wording, 3 to 4 observable good_answer_covers points, one follow_up, and one short watch_out_for red flag.',
     '7. Compare the resume with the job description and list 2 to 4 resume_points_to_probe. Each point must identify a claim, evidence gap, or listed skill to verify and reference the question_numbers that test it.',
-    '8. Return a topic_coverage summary with each selected topic, its question_count, and its question_numbers.',
-    '9. Before responding, verify that question numbers are sequential, totals match the questions, every selected topic is covered, every question topic exactly matches one selected topic, and the JSON is valid.',
+    '8. Treat every recruiter-selected topic as critical for the later interview evaluation.',
+    '9. Return a topic_coverage summary with each selected topic, its question_count, and its question_numbers.',
+    '10. Before responding, verify that question numbers are sequential, totals match the questions, every selected topic is covered, every question topic exactly matches one selected topic, and the JSON is valid.',
     '',
     'OUTPUT FORMAT (JSON only):',
     '{',
@@ -1678,6 +1692,999 @@ exports.approveInterviewPlan = onCall(
     })
   },
 )
+
+function requireTranscript(value) {
+  if (typeof value !== 'string') {
+    throw new HttpsError('invalid-argument', 'Paste the interview transcript before continuing.')
+  }
+
+  const transcript = value.trim()
+  if (transcript.length < 20) {
+    throw new HttpsError('invalid-argument', 'The interview transcript is too short.')
+  }
+  if (transcript.length > 200_000) {
+    throw new HttpsError('invalid-argument', 'The interview transcript must be 200,000 characters or fewer.')
+  }
+  return transcript
+}
+
+function requireInterviewerNotes(value) {
+  if (value === undefined || value === null || value === '') return ''
+  if (typeof value !== 'string') {
+    throw new HttpsError('invalid-argument', 'Recruiter notes must be text.')
+  }
+  const notes = value.trim()
+  if (notes.length > 3_000) {
+    throw new HttpsError('invalid-argument', 'Recruiter notes must be 3,000 characters or fewer.')
+  }
+  return notes
+}
+
+exports.saveInterviewTranscript = onCall(
+  FUNCTION_OPTIONS,
+  async request => {
+    const uid = requireSignedIn(request)
+    const interviewId = requireDocumentId(request.data?.interviewId, 'interview ID')
+    const approvedPlanVersion = Number(request.data?.approvedPlanVersion)
+    if (!Number.isInteger(approvedPlanVersion) || approvedPlanVersion < 1) {
+      throw new HttpsError('invalid-argument', 'A valid approved interview plan version is required.')
+    }
+
+    const transcript = requireTranscript(request.data?.transcript)
+    const interviewerNotes = requireInterviewerNotes(request.data?.interviewerNotes)
+    if (typeof request.data?.removeContactDetails !== 'boolean') {
+      throw new HttpsError('invalid-argument', 'Choose whether contact details should be removed before AI processing.')
+    }
+    const removeContactDetails = request.data.removeContactDetails
+    const wordCount = transcript.split(/\s+/).filter(Boolean).length
+    const transcriptHash = crypto.createHash('sha256').update(JSON.stringify({
+      approvedPlanVersion,
+      transcript,
+      interviewerNotes,
+      removeContactDetails,
+    })).digest('hex')
+    const interviewRef = db.collection('interviews').doc(interviewId)
+    const transcriptRef = db.collection('interviewTranscripts').doc(interviewId)
+
+    return db.runTransaction(async transaction => {
+      const [interviewSnapshot, transcriptSnapshot] = await Promise.all([
+        transaction.get(interviewRef),
+        transaction.get(transcriptRef),
+      ])
+
+      if (!interviewSnapshot.exists || interviewSnapshot.get('ownerId') !== uid) {
+        throw new HttpsError('permission-denied', 'The interview is unavailable.')
+      }
+      if (transcriptSnapshot.exists && transcriptSnapshot.get('ownerId') !== uid) {
+        throw new HttpsError('permission-denied', 'The interview transcript is unavailable.')
+      }
+
+      const interview = interviewSnapshot.data()
+      const storedApprovedVersion = Number(interview.approvedPlanVersion || 0)
+      if (!interview.approvedAt || storedApprovedVersion !== approvedPlanVersion) {
+        throw new HttpsError(
+          'failed-precondition',
+          'The approved interview plan has changed. Return to the plan and approve the current version.',
+        )
+      }
+      if (!['plan_approved', 'transcript_ready'].includes(interview.status)) {
+        throw new HttpsError(
+          'failed-precondition',
+          interview.status === 'report_ready'
+            ? 'This transcript is locked because its final report has already been generated.'
+            : 'Approve the interview plan before saving a transcript.',
+        )
+      }
+
+      const previousTranscriptHash = transcriptSnapshot.get('transcriptHash') || ''
+      const previousTranscriptVersion = Number(transcriptSnapshot.get('transcriptVersion') || 0)
+      const transcriptVersion = previousTranscriptHash === transcriptHash && previousTranscriptVersion > 0
+        ? previousTranscriptVersion
+        : previousTranscriptVersion + 1
+
+      const transcriptData = {
+        schemaVersion: 3,
+        ownerId: uid,
+        interviewId,
+        candidateId: interview.candidateId,
+        jobId: interview.jobId,
+        approvedPlanVersion,
+        transcriptVersion,
+        transcriptHash,
+        transcript,
+        wordCount,
+        speakerAttributionMode: 'gemini_inferred',
+        interviewerNotes,
+        removeContactDetails,
+        status: 'ready',
+        updatedAt: FieldValue.serverTimestamp(),
+      }
+
+      if (transcriptSnapshot.exists) {
+        transaction.update(transcriptRef, {
+          ...transcriptData,
+          speakerMapping: FieldValue.delete(),
+        })
+      } else {
+        transaction.create(transcriptRef, {
+          ...transcriptData,
+          createdAt: FieldValue.serverTimestamp(),
+        })
+      }
+      transaction.update(interviewRef, {
+        status: 'transcript_ready',
+        currentStep: 4,
+        transcriptId: interviewId,
+        transcriptUpdatedAt: FieldValue.serverTimestamp(),
+        updatedAt: FieldValue.serverTimestamp(),
+      })
+
+      return {
+        interviewId,
+        transcriptId: interviewId,
+        approvedPlanVersion,
+        transcriptVersion,
+        transcriptHash,
+        status: 'transcript_ready',
+        wordCount,
+        updated: transcriptSnapshot.exists,
+      }
+    })
+  },
+)
+
+function invalidInterviewReport(message = 'Gemini returned an invalid interview report.') {
+  throw new HttpsError('data-loss', message)
+}
+
+function interviewReportText(value, label, maximum, allowEmpty = false) {
+  if (typeof value !== 'string') {
+    invalidInterviewReport(`Gemini returned an interview report without ${label}.`)
+  }
+  const text = value.trim()
+  if (!allowEmpty && !text) {
+    invalidInterviewReport(`Gemini returned an interview report without ${label}.`)
+  }
+  if (text.length > maximum) {
+    invalidInterviewReport(`Gemini returned ${label} that is too long.`)
+  }
+  return text
+}
+
+function interviewReportTextArray(value, label, maximumItems, maximumLength, allowEmpty = true) {
+  if (!Array.isArray(value) || (!allowEmpty && value.length === 0) || value.length > maximumItems) {
+    invalidInterviewReport(`Gemini returned an invalid ${label}.`)
+  }
+  return value.map((item, index) => (
+    interviewReportText(item, `${label} item ${index + 1}`, maximumLength)
+  ))
+}
+
+function interviewReportScore(value, label, allowNull = false) {
+  if (allowNull && value === null) return null
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 1 || value > 5) {
+    invalidInterviewReport(`Gemini returned an invalid ${label}.`)
+  }
+  if (!Number.isInteger(value * 2)) {
+    invalidInterviewReport(`${label} must use whole or half points.`)
+  }
+  return value
+}
+
+function roundToHalf(value) {
+  return Math.round(value * 2) / 2
+}
+
+function roundToTenth(value) {
+  return Math.round(value * 10) / 10
+}
+
+function sameNumber(value, expected) {
+  return typeof value === 'number' && Number.isFinite(value) && Math.abs(value - expected) < 0.001
+}
+
+function approvedPlanModel(plan) {
+  if (!plan || typeof plan !== 'object') {
+    throw new HttpsError(
+      'failed-precondition',
+      'The approved interview plan is missing.',
+    )
+  }
+
+  const hasStructuredSections = Array.isArray(plan.sections) && plan.sections.length > 0
+  const hasLegacyQuestions = Array.isArray(plan.questions) && plan.questions.length > 0
+  if (!hasStructuredSections && !hasLegacyQuestions) {
+    throw new HttpsError('failed-precondition', 'The approved interview plan has no questions to evaluate.')
+  }
+
+  // New plans already contain named sections. Older approved plans stored one
+  // flat questions array; wrap that array without changing the questions.
+  const sourceFormat = hasStructuredSections ? 'structured' : 'legacy_flat'
+  const sourceSections = hasStructuredSections
+    ? plan.sections
+    : [{ name: 'Interview questions', questions: plan.questions }]
+  let questionIndex = 0
+
+  const sections = sourceSections.map((section, sectionIndex) => {
+    const area = typeof section?.name === 'string' && section.name.trim()
+      ? section.name.trim()
+      : `Section ${sectionIndex + 1}`
+    const questions = Array.isArray(section?.questions) ? section.questions : []
+    if (questions.length === 0) {
+      throw new HttpsError('failed-precondition', 'The approved interview plan contains an empty section.')
+    }
+    return {
+      area,
+      questions: questions.map(question => {
+        questionIndex += 1
+        const goodAnswerCovers = Array.isArray(question?.goodAnswerCovers)
+          ? question.goodAnswerCovers
+          : Array.isArray(question?.good_answer_covers)
+            ? question.good_answer_covers
+            : Array.isArray(question?.goodAnswerIncludes)
+              ? question.goodAnswerIncludes
+              : Array.isArray(question?.good_answer_includes)
+                ? question.good_answer_includes
+                : []
+        if (sourceFormat === 'legacy_flat' && goodAnswerCovers.length === 0) {
+          throw new HttpsError(
+            'failed-precondition',
+            `Question ${questionIndex} in the older approved plan has no answer guide, so it cannot be scored fairly.`,
+          )
+        }
+        return {
+          ...question,
+          area,
+          number: Number(question?.number || question?.order || questionIndex),
+          topic: typeof question?.topic === 'string' && question.topic.trim()
+            ? question.topic.trim()
+            : 'General',
+          minutes: Number(question?.minutes || question?.estimatedMinutes || 0),
+          question: question?.question || question?.prompt || '',
+          goodAnswerCovers,
+          followUp: question?.followUp || question?.follow_up || '',
+          watchOutFor: question?.watchOutFor || question?.watch_out_for || '',
+        }
+      }),
+    }
+  })
+  const questions = sections.flatMap(section => section.questions)
+  if (questions.some((question, index) => question.number !== index + 1)) {
+    throw new HttpsError('failed-precondition', 'The approved interview plan has invalid question numbers.')
+  }
+
+  const configuredCriticalTopics = Array.isArray(plan.criticalTopics)
+    ? plan.criticalTopics
+    : []
+  const coverageTopics = Array.isArray(plan.topicCoverage)
+    ? plan.topicCoverage.map(item => item?.topic)
+    : []
+  const questionTopics = questions.map(question => question.topic)
+  const criticalTopics = uniqueTextItems([
+    configuredCriticalTopics.length > 0
+      ? configuredCriticalTopics
+      : coverageTopics.length > 0
+        ? coverageTopics
+        : questionTopics,
+  ], 12)
+
+  const resumePointsToProbe = Array.isArray(plan.resumePointsToProbe)
+    ? plan.resumePointsToProbe
+    : []
+  const evaluationPlan = {
+    schemaVersion: plan.schemaVersion || 1,
+    title: plan.title || 'Approved interview plan',
+    totalQuestions: questions.length,
+    totalMinutes: questions.reduce((total, question) => total + Number(question.minutes || 0), 0),
+    sections: sections.map(section => ({
+      name: section.area,
+      questions: section.questions.map(({ area, ...question }) => question),
+    })),
+    criticalTopics,
+    resumePointsToProbe,
+  }
+
+  return {
+    sourceFormat,
+    sections,
+    questions,
+    criticalTopics,
+    resumePointsToProbe,
+    evaluationPlan,
+  }
+}
+
+function redactTranscriptContactDetails(transcript) {
+  return transcript
+    .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, '[email removed]')
+    .replace(/(?:\+?\d[\d\s().-]{7,}\d)/g, '[phone removed]')
+}
+
+function normalizedEvidenceText(value) {
+  return String(value || '').trim().replace(/\s+/g, ' ')
+}
+
+function validateTranscriptQuote(value, label, transcript) {
+  const quote = interviewReportText(value, label, 800)
+  const normalizedQuote = normalizedEvidenceText(quote)
+  if (!normalizedEvidenceText(transcript).includes(normalizedQuote)) {
+    invalidInterviewReport(`${label} is not a verbatim quote from the interview transcript.`)
+  }
+  return quote
+}
+
+function sameTextSet(first, second) {
+  const normalize = values => values.map(value => String(value).trim().toLowerCase()).sort()
+  return JSON.stringify(normalize(first)) === JSON.stringify(normalize(second))
+}
+
+function sameNumberSet(first, second) {
+  const normalize = values => [...new Set(values.map(Number))].sort((a, b) => a - b)
+  return JSON.stringify(normalize(first)) === JSON.stringify(normalize(second))
+}
+
+function validateInterviewReport(value, plan, transcript) {
+  if (!value || typeof value !== 'object') invalidInterviewReport()
+
+  const planModel = approvedPlanModel(plan)
+  const planQuestionMap = new Map(planModel.questions.map(question => [question.number, question]))
+
+  if (!Array.isArray(value.questions) || value.questions.length !== planModel.questions.length) {
+    invalidInterviewReport('Gemini must evaluate every approved interview question exactly once.')
+  }
+  const returnedNumbers = value.questions.map(item => Number(item?.number))
+  if (!sameNumberSet(returnedNumbers, planModel.questions.map(question => question.number))) {
+    invalidInterviewReport('Gemini returned unknown, missing, or duplicate interview question numbers.')
+  }
+
+  const questions = planModel.questions.map(planQuestion => {
+    const item = value.questions.find(candidate => Number(candidate?.number) === planQuestion.number)
+    const status = item?.status
+    if (status !== 'scored' && status !== 'not_covered') {
+      invalidInterviewReport(`Question ${planQuestion.number} has an invalid status.`)
+    }
+    if (item?.area !== planQuestion.area) {
+      invalidInterviewReport(`Question ${planQuestion.number} was assigned to the wrong plan area.`)
+    }
+
+    const score = interviewReportScore(item?.score, `question ${planQuestion.number} score`, true)
+    const pointsHit = interviewReportTextArray(
+      item?.points_hit || [],
+      `question ${planQuestion.number} points hit`,
+      4,
+      400,
+    )
+    const pointsMissed = interviewReportTextArray(
+      item?.points_missed || [],
+      `question ${planQuestion.number} points missed`,
+      4,
+      400,
+    )
+    const evidenceQuotes = interviewReportTextArray(
+      item?.evidence_quotes || [],
+      `question ${planQuestion.number} evidence quotes`,
+      2,
+      800,
+    ).map((quote, index) => validateTranscriptQuote(
+      quote,
+      `question ${planQuestion.number} evidence quote ${index + 1}`,
+      transcript,
+    ))
+
+    if (status === 'not_covered') {
+      if (score !== null || pointsHit.length > 0 || pointsMissed.length > 0 || evidenceQuotes.length > 0) {
+        invalidInterviewReport(`Question ${planQuestion.number} is not covered and must use a null score with no evidence.`)
+      }
+    } else {
+      if (score === null || evidenceQuotes.length === 0) {
+        invalidInterviewReport(`Question ${planQuestion.number} needs a score and candidate evidence.`)
+      }
+      if (!sameTextSet([...pointsHit, ...pointsMissed], planQuestion.goodAnswerCovers)) {
+        invalidInterviewReport(`Question ${planQuestion.number} must classify every approved answer-guide point exactly once.`)
+      }
+    }
+
+    return {
+      number: planQuestion.number,
+      area: planQuestion.area,
+      topic: planQuestion.topic,
+      score,
+      status,
+      whatTheySaid: interviewReportText(
+        item?.what_they_said || '',
+        `question ${planQuestion.number} answer summary`,
+        300,
+        status === 'not_covered',
+      ),
+      pointsHit,
+      pointsMissed,
+      evidenceQuotes,
+    }
+  })
+
+  if (!Array.isArray(value.scores_by_area) || value.scores_by_area.length !== planModel.sections.length) {
+    invalidInterviewReport('Gemini must return exactly one score for every approved plan area.')
+  }
+  const areaNames = value.scores_by_area.map(item => item?.area)
+  if (!sameTextSet(areaNames, planModel.sections.map(section => section.area))) {
+    invalidInterviewReport('Gemini returned unknown, missing, or duplicate plan areas.')
+  }
+  const scoresByArea = planModel.sections.map(section => {
+    const item = value.scores_by_area.find(candidate => candidate?.area === section.area)
+    const scoredQuestions = questions.filter(question => question.area === section.area && question.status === 'scored')
+    const expectedScore = scoredQuestions.length > 0
+      ? roundToHalf(scoredQuestions.reduce((total, question) => total + question.score, 0) / scoredQuestions.length)
+      : null
+    const status = item?.status
+    const score = interviewReportScore(item?.score, `${section.area} area score`, true)
+    if (expectedScore === null) {
+      if (status !== 'not_covered' || score !== null) {
+        invalidInterviewReport(`${section.area} must be marked not covered with a null score.`)
+      }
+    } else if (status !== 'scored' || !sameNumber(score, expectedScore)) {
+      invalidInterviewReport(`${section.area} does not match its question-score average.`)
+    }
+    return { area: section.area, score, status }
+  })
+
+  const scoredAreas = scoresByArea.filter(area => area.status === 'scored')
+  const expectedOverall = scoredAreas.length > 0
+    ? roundToTenth(scoredAreas.reduce((total, area) => total + area.score, 0) / scoredAreas.length)
+    : null
+  const overallScore = value.overall_score === null
+    ? null
+    : Number(value.overall_score)
+  if ((expectedOverall === null && overallScore !== null) || (expectedOverall !== null && !sameNumber(overallScore, expectedOverall))) {
+    invalidInterviewReport('Gemini returned an overall score that does not match the area scores.')
+  }
+
+  const notCoveredQuestions = questions.filter(question => question.status === 'not_covered')
+  const coverage = value.plan_coverage
+  if (
+    !coverage
+    || Number(coverage.covered) !== questions.length - notCoveredQuestions.length
+    || Number(coverage.total) !== questions.length
+    || !Array.isArray(coverage.not_covered_questions)
+    || !sameNumberSet(
+      coverage.not_covered_questions.map(item => item?.number),
+      notCoveredQuestions.map(question => question.number),
+    )
+  ) {
+    invalidInterviewReport('Gemini returned plan coverage that does not match the question evaluations.')
+  }
+  const normalizedNotCovered = notCoveredQuestions.map(question => {
+    const item = coverage.not_covered_questions.find(candidate => Number(candidate?.number) === question.number)
+    if (!item || item.topic !== question.topic) {
+      invalidInterviewReport(`The not-covered entry for question ${question.number} has the wrong topic.`)
+    }
+    return { number: question.number, topic: question.topic }
+  })
+
+  const evidenceLevel = value.evidence_strength?.level
+  if (!['High', 'Medium', 'Low'].includes(evidenceLevel)) {
+    invalidInterviewReport('Gemini returned an invalid evidence-strength level.')
+  }
+  const evidenceStrength = {
+    level: evidenceLevel,
+    reason: interviewReportText(value.evidence_strength?.reason, 'an evidence-strength reason', 400),
+  }
+
+  const strengthsInput = value.strengths || []
+  if (!Array.isArray(strengthsInput) || strengthsInput.length > 3) {
+    invalidInterviewReport('Gemini returned too many strengths.')
+  }
+  const strengths = strengthsInput.map((item, index) => {
+    const question = Number(item?.question)
+    if (!planQuestionMap.has(question) || questions.find(candidate => candidate.number === question)?.status !== 'scored') {
+      invalidInterviewReport(`Strength ${index + 1} references an invalid question.`)
+    }
+    return {
+      title: interviewReportText(item?.title, `strength ${index + 1} title`, 120),
+      description: interviewReportText(item?.description, `strength ${index + 1} description`, 350),
+      quote: validateTranscriptQuote(item?.quote, `strength ${index + 1} quote`, transcript),
+      question,
+    }
+  })
+
+  const concernsInput = value.concerns || []
+  if (!Array.isArray(concernsInput) || concernsInput.length > 4) {
+    invalidInterviewReport('Gemini returned too many concerns.')
+  }
+  const concerns = concernsInput.map((item, index) => ({
+    title: interviewReportText(item?.title, `concern ${index + 1} title`, 120),
+    explanation: interviewReportText(item?.explanation, `concern ${index + 1} explanation`, 400),
+    suggestedFollowUp: interviewReportText(item?.suggested_followup, `concern ${index + 1} follow-up`, 400),
+  }))
+
+  const criticalChecksInput = value.critical_topic_checks || []
+  if (!Array.isArray(criticalChecksInput) || criticalChecksInput.length !== planModel.criticalTopics.length) {
+    invalidInterviewReport('Gemini must check every approved critical topic exactly once.')
+  }
+  if (!sameTextSet(criticalChecksInput.map(item => item?.topic), planModel.criticalTopics)) {
+    invalidInterviewReport('Gemini returned unknown, missing, or duplicate critical topics.')
+  }
+  const criticalTopicChecks = planModel.criticalTopics.map(topic => {
+    const item = criticalChecksInput.find(candidate => candidate?.topic === topic)
+    const topicQuestions = questions.filter(question => question.topic.toLowerCase() === topic.toLowerCase())
+    const scoredTopicQuestions = topicQuestions.filter(question => question.status === 'scored')
+    const expectedScore = scoredTopicQuestions.length > 0
+      ? roundToHalf(scoredTopicQuestions.reduce((total, question) => total + question.score, 0) / scoredTopicQuestions.length)
+      : null
+    const score = interviewReportScore(item?.score, `${topic} critical-topic score`, true)
+    const status = item?.status
+    if (!['met', 'partially_met', 'not_met', 'not_covered'].includes(status)) {
+      invalidInterviewReport(`${topic} has an invalid critical-topic status.`)
+    }
+    if (expectedScore === null) {
+      if (status !== 'not_covered' || score !== null) {
+        invalidInterviewReport(`${topic} must be not covered with a null score.`)
+      }
+    } else if (status === 'not_covered' || !sameNumber(score, expectedScore)) {
+      invalidInterviewReport(`${topic} has a critical-topic score that does not match its questions.`)
+    }
+    const questionNumbers = Array.isArray(item?.question_numbers) ? item.question_numbers.map(Number) : []
+    if (!sameNumberSet(questionNumbers, topicQuestions.map(question => question.number))) {
+      invalidInterviewReport(`${topic} must reference every approved question for that topic.`)
+    }
+    const evidenceQuote = item?.evidence_quote === null || item?.evidence_quote === ''
+      ? null
+      : validateTranscriptQuote(item.evidence_quote, `${topic} critical-topic evidence quote`, transcript)
+    return { topic, score, status, questionNumbers: questionNumbers.sort((a, b) => a - b), evidenceQuote }
+  })
+
+  const resumeProbeInput = value.resume_probe_results || []
+  if (!Array.isArray(resumeProbeInput) || resumeProbeInput.length !== planModel.resumePointsToProbe.length) {
+    invalidInterviewReport('Gemini must evaluate every approved resume point to probe exactly once.')
+  }
+  const resumeProbeResults = planModel.resumePointsToProbe.map((probe, index) => {
+    const item = resumeProbeInput[index]
+    if (item?.point !== probe.point) {
+      invalidInterviewReport(`Resume probe ${index + 1} does not match the approved plan.`)
+    }
+    if (!['supported', 'partially_supported', 'not_supported', 'not_covered'].includes(item?.status)) {
+      invalidInterviewReport(`Resume probe ${index + 1} has an invalid status.`)
+    }
+    const expectedQuestions = probe.questionNumbers || probe.question_numbers || []
+    const questionNumbers = Array.isArray(item?.question_numbers) ? item.question_numbers.map(Number) : []
+    if (!sameNumberSet(questionNumbers, expectedQuestions)) {
+      invalidInterviewReport(`Resume probe ${index + 1} references the wrong questions.`)
+    }
+    const evidenceQuote = item?.evidence_quote === null || item?.evidence_quote === ''
+      ? null
+      : validateTranscriptQuote(item.evidence_quote, `resume probe ${index + 1} evidence quote`, transcript)
+    return {
+      point: probe.point,
+      status: item.status,
+      questionNumbers: questionNumbers.sort((a, b) => a - b),
+      finding: interviewReportText(item?.finding, `resume probe ${index + 1} finding`, 400),
+      evidenceQuote,
+    }
+  })
+
+  const noteObservationsInput = value.interviewer_note_observations || []
+  if (!Array.isArray(noteObservationsInput) || noteObservationsInput.length > 4) {
+    invalidInterviewReport('Gemini returned invalid interviewer-note observations.')
+  }
+  const interviewerNoteObservations = noteObservationsInput.map((item, index) => ({
+    observation: interviewReportText(item?.observation, `interviewer-note observation ${index + 1}`, 400),
+    relatedQuestions: Array.isArray(item?.related_questions)
+      ? item.related_questions.map(number => interviewPlanInteger(number, 1, questions.length, 'related question number'))
+      : [],
+    followUp: interviewReportText(item?.follow_up, `interviewer-note follow-up ${index + 1}`, 400),
+  }))
+
+  const decision = value.ai_suggestion?.decision
+  if (!INTERVIEW_REPORT_DECISIONS.has(decision)) {
+    invalidInterviewReport('Gemini returned an invalid advisory suggestion.')
+  }
+  const criticalProblem = criticalTopicChecks.some(check => check.score === null || check.score < 3)
+  if (
+    decision === 'Move to offer'
+    && (overallScore === null || overallScore < 4.3 || evidenceLevel === 'Low' || criticalProblem)
+  ) {
+    invalidInterviewReport('Gemini suggested moving to offer without meeting the approved safeguards.')
+  }
+
+  return {
+    schemaVersion: 1,
+    overallScore,
+    aiSuggestion: {
+      decision,
+      reason: interviewReportText(value.ai_suggestion?.reason, 'an advisory suggestion reason', 400),
+      advisory: true,
+    },
+    planCoverage: {
+      covered: questions.length - notCoveredQuestions.length,
+      total: questions.length,
+      notCoveredQuestions: normalizedNotCovered,
+    },
+    evidenceStrength,
+    summary: interviewReportText(value.summary, 'a report summary', 1_200),
+    scoresByArea,
+    strengths,
+    concerns,
+    questions,
+    criticalTopicChecks,
+    resumeProbeResults,
+    interviewerNoteObservations,
+    dataQualityFlags: interviewReportTextArray(value.data_quality_flags || [], 'data-quality flags', 8, 300),
+  }
+}
+
+function buildInterviewReportPrompt(interview, plan, transcriptDocument, transcriptForGemini) {
+  const planModel = approvedPlanModel(plan)
+
+  return [
+    'You are an impartial interview evaluator supporting a human hiring manager. Score interview answers against the pre-approved plan and answer guide.',
+    '',
+    'RULES:',
+    `- The candidate is ${interview.candidateName}. Infer which content belongs to the candidate from names, conversational context, timestamps, formatting, and the sequence of questions and answers. Do not require a fixed transcript format.`,
+    '- Score only content you can confidently attribute to the candidate in the TRANSCRIPT EVIDENCE section. Never infer skills from the resume, job title, or interviewer notes.',
+    '- Judge every answer only against its approved goodAnswerCovers points.',
+    '- Quotes must be copied word for word from content you can confidently attribute to the candidate. Never quote interviewer speech, paraphrase inside quotation marks, or invent quotes.',
+    '- Ignore accent, grammar, fluency, name, gender, age, health, family status, religion, ethnicity, nationality, disability, and anything unrelated to job-relevant content.',
+    '- If a planned question was not asked or not answered, mark it not_covered and use null for its score. Never assign a low score merely because it was not covered.',
+    '- If speaker attribution is ambiguous, do not guess. Mark the affected question not_covered, set evidence strength to Low when ambiguity is material, and add a data_quality_flag explaining the uncertainty.',
+    '- Interviewer notes are unverified context. Keep them separate, do not use them as transcript evidence, and do not let them change any score.',
+    '- The AI suggestion is advisory only. The human recruiter makes the decision.',
+    '- Return valid JSON only, without Markdown or commentary.',
+    '',
+    `CANDIDATE: ${interview.candidateName}`,
+    `ROLE: ${interview.jobTitle}`,
+    '',
+    'APPROVED INTERVIEW PLAN JSON:',
+    JSON.stringify(planModel.evaluationPlan),
+    '',
+    `APPROVED CRITICAL TOPICS: ${planModel.criticalTopics.length > 0 ? planModel.criticalTopics.join(' | ') : 'None'}`,
+    '',
+    'APPROVED RESUME POINTS TO PROBE JSON:',
+    JSON.stringify(planModel.resumePointsToProbe),
+    '',
+    'TRANSCRIPT EVIDENCE:',
+    transcriptForGemini,
+    '',
+    'INTERVIEWER NOTES - UNVERIFIED CONTEXT, NEVER SCORE FROM THIS SECTION:',
+    transcriptDocument.interviewerNotes || 'None',
+    '',
+    'SCORING SCALE (whole or half points only):',
+    '1 = no relevant evidence',
+    '2 = weak or very generic evidence',
+    '3 = meets the role at a high level',
+    '4 = specific and covers most approved guide points',
+    '5 = strong, specific evidence covering all or nearly all approved guide points',
+    'not_covered = null score because the planned question was not asked or answered',
+    '',
+    'TASKS:',
+    `1. Identify ${interview.candidateName}'s answers from the transcript format and conversation, then match every planned question by meaning even if reworded or reordered. Include every approved question exactly once.`,
+    '2. For scored questions, classify every approved goodAnswerCovers string exactly once into points_hit or points_missed. Copy those guide strings exactly. Include 1 or 2 verbatim candidate evidence_quotes. For not_covered questions, use score null and empty evidence arrays.',
+    '3. Use the exact approved section name as each question area. Area score is the average of covered question scores rounded to the nearest 0.5. If none are covered, use null and not_covered.',
+    '4. Overall score is the average of scored areas only, rounded to one decimal. If no area is scored, use null.',
+    '5. Return exact plan coverage and identify the question number and exact topic for every not-covered question.',
+    '6. Rate evidence strength High, Medium, or Low and briefly explain why.',
+    '7. Return up to 3 strengths. Every strength needs one verbatim candidate quote and a covered question number.',
+    '8. Return up to 4 concerns with a practical follow-up. Include weak evidence, uncovered questions, and unresolved approved resume probes where relevant.',
+    '9. Evaluate every approved critical topic exactly once. Use all question numbers assigned to that topic and their average score, rounded to 0.5. If no question was covered, use status not_covered and score null.',
+    '10. Evaluate every approved resume point to probe in the same order and with its exact point text and linked question numbers. Use only transcript evidence.',
+    '11. Put any useful interviewer-note context only in interviewer_note_observations. This section must never contain scores or claims that the transcript proves the note.',
+    '12. Provide a 3 to 4 sentence summary without score numbers.',
+    '13. Choose one advisory suggestion: Move to offer, Move to next stage, Another interview, or Do not progress. Move to offer requires overall 4.3+, High or Medium evidence, and no critical topic below 3 or not covered.',
+    '14. Add data-quality flags for incomplete transcripts, unclear speakers, unusually short evidence, redactions, or contradictions. Use an empty array when none apply.',
+    '',
+    'OUTPUT FORMAT (JSON only):',
+    '{',
+    '  "overall_score": null,',
+    '  "ai_suggestion": { "decision": "", "reason": "" },',
+    '  "plan_coverage": { "covered": 0, "total": 0, "not_covered_questions": [{ "number": 0, "topic": "" }] },',
+    '  "evidence_strength": { "level": "High | Medium | Low", "reason": "" },',
+    '  "summary": "",',
+    '  "scores_by_area": [{ "area": "", "score": null, "status": "scored | not_covered" }],',
+    '  "strengths": [{ "title": "", "description": "", "quote": "", "question": 0 }],',
+    '  "concerns": [{ "title": "", "explanation": "", "suggested_followup": "" }],',
+    '  "questions": [{',
+    '    "number": 0, "area": "", "score": null, "status": "scored | not_covered",',
+    '    "what_they_said": "", "points_hit": [""], "points_missed": [""], "evidence_quotes": [""]',
+    '  }],',
+    '  "critical_topic_checks": [{',
+    '    "topic": "", "score": null, "status": "met | partially_met | not_met | not_covered",',
+    '    "question_numbers": [1], "evidence_quote": null',
+    '  }],',
+    '  "resume_probe_results": [{',
+    '    "point": "", "status": "supported | partially_supported | not_supported | not_covered",',
+    '    "question_numbers": [1], "finding": "", "evidence_quote": null',
+    '  }],',
+    '  "interviewer_note_observations": [{ "observation": "", "related_questions": [1], "follow_up": "" }],',
+    '  "data_quality_flags": []',
+    '}',
+    '',
+    'Before responding, verify all arithmetic, exact question coverage, exact candidate quotes, critical topics, resume probes, and valid JSON.',
+  ].join('\n')
+}
+
+async function runGeminiInterviewReport(apiKey, interview, plan, transcriptDocument, uid) {
+  const transcriptForGemini = transcriptDocument.removeContactDetails
+    ? redactTranscriptContactDetails(transcriptDocument.transcript)
+    : transcriptDocument.transcript
+  const prompt = buildInterviewReportPrompt(interview, plan, transcriptDocument, transcriptForGemini)
+  const requestBody = JSON.stringify({
+    contents: [{ role: 'user', parts: [{ text: prompt }] }],
+    generationConfig: { responseMimeType: 'application/json' },
+  })
+  const context = { interviewId: interview.id, jobId: interview.jobId }
+  const requestMetadata = {
+    requestBodyBytes: Buffer.byteLength(requestBody),
+    transcriptCharacters: transcriptDocument.transcript.length,
+    transcriptVersion: transcriptDocument.transcriptVersion,
+    planVersion: interview.approvedPlanVersion,
+  }
+  let requestResult = null
+
+  try {
+    requestResult = await requestGeminiGeneration({
+      apiKey,
+      requestBody,
+      operation: 'interview_report',
+      uid,
+      context,
+      model: GEMINI_INTERVIEW_MODEL,
+    })
+    if (!requestResult.response) {
+      const diagnosticId = await recordGeminiFailure({
+        uid,
+        operation: 'interview_report',
+        context,
+        attempts: requestResult.attempts,
+        failure: requestResult.failure,
+        requestMetadata,
+        model: GEMINI_INTERVIEW_MODEL,
+      })
+      throw geminiError(
+        requestResult.failure,
+        'interview_report',
+        requestResult.attempts.length,
+        diagnosticId,
+      )
+    }
+
+    const responseBody = await requestResult.response.json()
+    const responseText = responseBody?.candidates?.[0]?.content?.parts
+      ?.map(part => part.text || '')
+      .join('')
+    return validateInterviewReport(
+      parseGeminiJson(responseText),
+      plan,
+      transcriptForGemini,
+    )
+  } catch (error) {
+    if (error instanceof HttpsError) {
+      if (error.code === 'data-loss') {
+        await recordGeminiFailure({
+          uid,
+          operation: 'interview_report',
+          context,
+          attempts: requestResult?.attempts || [],
+          failure: {
+            category: 'invalid_response',
+            httpStatus: 200,
+            safeMessage: 'Gemini returned an interview report that failed application validation.',
+          },
+          requestMetadata,
+          model: GEMINI_INTERVIEW_MODEL,
+        })
+      }
+      throw error
+    }
+    logger.error('Gemini interview report request failed.', {
+      uid,
+      interviewId: interview.id,
+      error: error?.name || 'UnknownError',
+    })
+    throw new HttpsError('data-loss', 'Gemini returned an unreadable interview report. Try again.')
+  }
+}
+
+exports.generateInterviewReport = onCall(
+  SCREENING_FUNCTION_OPTIONS,
+  async request => {
+    const uid = requireSignedIn(request)
+    const interviewId = requireDocumentId(request.data?.interviewId, 'interview ID')
+    const interviewRef = db.collection('interviews').doc(interviewId)
+    const transcriptRef = db.collection('interviewTranscripts').doc(interviewId)
+    const reportRef = db.collection('interviewReports').doc(interviewId)
+    const generationId = crypto.randomUUID()
+    const now = Date.now()
+
+    const source = await db.runTransaction(async transaction => {
+      const [interviewSnapshot, transcriptSnapshot, reportSnapshot] = await Promise.all([
+        transaction.get(interviewRef),
+        transaction.get(transcriptRef),
+        transaction.get(reportRef),
+      ])
+      if (!interviewSnapshot.exists || interviewSnapshot.get('ownerId') !== uid) {
+        throw new HttpsError('permission-denied', 'The interview is unavailable.')
+      }
+      if (!transcriptSnapshot.exists || transcriptSnapshot.get('ownerId') !== uid) {
+        throw new HttpsError('failed-precondition', 'Save the interview transcript before generating a report.')
+      }
+
+      const interview = { id: interviewId, ...interviewSnapshot.data() }
+      const transcriptDocument = transcriptSnapshot.data()
+      const planVersion = Number(interview.approvedPlanVersion || 0)
+      const transcriptVersion = Number(transcriptDocument.transcriptVersion || 0)
+      if (!interview.approvedAt || planVersion < 1 || !interview.plan) {
+        throw new HttpsError('failed-precondition', 'Approve the interview plan before generating a report.')
+      }
+      if (transcriptDocument.approvedPlanVersion !== planVersion || transcriptVersion < 1 || !transcriptDocument.transcriptHash) {
+        throw new HttpsError('failed-precondition', 'Save the transcript again so it is linked to the approved plan version.')
+      }
+
+      const existing = reportSnapshot.exists ? reportSnapshot.data() : null
+      const sameSource = existing
+        && Number(existing.sourcePlanVersion) === planVersion
+        && Number(existing.sourceTranscriptVersion) === transcriptVersion
+        && existing.sourceTranscriptHash === transcriptDocument.transcriptHash
+      if (sameSource && existing.status === 'ready' && existing.report) {
+        return { alreadyGenerated: true, report: existing.report }
+      }
+      if (existing?.status === 'ready' && !sameSource) {
+        throw new HttpsError('failed-precondition', 'A final report already exists for a different saved transcript.')
+      }
+      const leaseExpiresAt = existing?.leaseExpiresAt?.toMillis?.() || Number(existing?.leaseExpiresAt) || 0
+      if (sameSource && existing?.status === 'generating' && leaseExpiresAt > now) {
+        throw new HttpsError('already-exists', 'This interview report is already being generated.')
+      }
+
+      transaction.set(reportRef, {
+        schemaVersion: 1,
+        ownerId: uid,
+        interviewId,
+        candidateId: interview.candidateId,
+        candidateName: interview.candidateName,
+        jobId: interview.jobId,
+        jobTitle: interview.jobTitle,
+        sourcePlanVersion: planVersion,
+        sourceTranscriptVersion: transcriptVersion,
+        sourceTranscriptHash: transcriptDocument.transcriptHash,
+        status: 'generating',
+        generationId,
+        leaseExpiresAt: new Date(now + (10 * 60 * 1000)),
+        promptVersion: INTERVIEW_REPORT_PROMPT_VERSION,
+        provider: 'gemini',
+        model: GEMINI_INTERVIEW_MODEL,
+        error: null,
+        updatedAt: FieldValue.serverTimestamp(),
+        ...(reportSnapshot.exists ? {} : { createdAt: FieldValue.serverTimestamp() }),
+      }, { merge: true })
+      transaction.update(interviewRef, {
+        status: 'report_generating',
+        currentStep: 5,
+        updatedAt: FieldValue.serverTimestamp(),
+      })
+      return { interview, transcriptDocument, plan: interview.plan, alreadyGenerated: false }
+    })
+
+    if (source.alreadyGenerated) {
+      return { interviewId, reportId: interviewId, status: 'report_ready', alreadyGenerated: true }
+    }
+
+    try {
+      const apiKey = await decryptGeminiKey(uid)
+      const report = await runGeminiInterviewReport(
+        apiKey,
+        source.interview,
+        source.plan,
+        source.transcriptDocument,
+        uid,
+      )
+
+      await db.runTransaction(async transaction => {
+        const reportSnapshot = await transaction.get(reportRef)
+        if (!reportSnapshot.exists || reportSnapshot.get('generationId') !== generationId) {
+          throw new HttpsError('aborted', 'This report generation was replaced by a newer request.')
+        }
+        transaction.update(reportRef, {
+          status: 'ready',
+          report,
+          generationId: null,
+          leaseExpiresAt: null,
+          generatedAt: FieldValue.serverTimestamp(),
+          updatedAt: FieldValue.serverTimestamp(),
+          humanDecision: reportSnapshot.get('humanDecision') || null,
+        })
+        transaction.update(interviewRef, {
+          status: 'report_ready',
+          currentStep: 5,
+          reportId: interviewId,
+          reportGeneratedAt: FieldValue.serverTimestamp(),
+          updatedAt: FieldValue.serverTimestamp(),
+        })
+      })
+
+      return { interviewId, reportId: interviewId, status: 'report_ready', alreadyGenerated: false }
+    } catch (error) {
+      try {
+        await db.runTransaction(async transaction => {
+          const reportSnapshot = await transaction.get(reportRef)
+          if (!reportSnapshot.exists || reportSnapshot.get('generationId') !== generationId) return
+          transaction.update(reportRef, {
+            status: 'failed',
+            generationId: null,
+            leaseExpiresAt: null,
+            error: {
+              code: error?.code || 'internal',
+              message: error instanceof HttpsError
+                ? error.message
+                : 'The interview report could not be generated.',
+            },
+            updatedAt: FieldValue.serverTimestamp(),
+          })
+          transaction.update(interviewRef, {
+            status: 'transcript_ready',
+            currentStep: 4,
+            updatedAt: FieldValue.serverTimestamp(),
+          })
+        })
+      } catch (recoveryError) {
+        logger.error('Interview report failure state could not be saved.', {
+          uid,
+          interviewId,
+          error: recoveryError?.code || recoveryError?.name || 'UnknownError',
+        })
+      }
+      throw error
+    }
+  },
+)
+
+exports.recordInterviewDecision = onCall(
+  FUNCTION_OPTIONS,
+  async request => {
+    const uid = requireSignedIn(request)
+    const interviewId = requireDocumentId(request.data?.interviewId, 'interview ID')
+    const decision = typeof request.data?.decision === 'string' ? request.data.decision.trim() : ''
+    const note = typeof request.data?.note === 'string' ? request.data.note.trim() : ''
+    if (!INTERVIEW_REPORT_DECISIONS.has(decision)) {
+      throw new HttpsError('invalid-argument', 'Choose a supported recruiter decision.')
+    }
+    if (note.length > 1_000) {
+      throw new HttpsError('invalid-argument', 'The recruiter decision note must be 1,000 characters or fewer.')
+    }
+
+    const interviewRef = db.collection('interviews').doc(interviewId)
+    const reportRef = db.collection('interviewReports').doc(interviewId)
+    await db.runTransaction(async transaction => {
+      const [interviewSnapshot, reportSnapshot] = await Promise.all([
+        transaction.get(interviewRef),
+        transaction.get(reportRef),
+      ])
+      if (!interviewSnapshot.exists || interviewSnapshot.get('ownerId') !== uid) {
+        throw new HttpsError('permission-denied', 'The interview is unavailable.')
+      }
+      if (!reportSnapshot.exists || reportSnapshot.get('ownerId') !== uid || reportSnapshot.get('status') !== 'ready') {
+        throw new HttpsError('failed-precondition', 'Generate the final report before recording a decision.')
+      }
+
+      const humanDecision = {
+        decision,
+        note,
+        recordedBy: uid,
+        recordedAt: FieldValue.serverTimestamp(),
+      }
+      transaction.update(reportRef, { humanDecision, updatedAt: FieldValue.serverTimestamp() })
+      transaction.update(interviewRef, {
+        status: 'reviewed',
+        humanDecision: decision,
+        decisionRecordedAt: FieldValue.serverTimestamp(),
+        updatedAt: FieldValue.serverTimestamp(),
+      })
+    })
+
+    return { interviewId, decision, status: 'reviewed' }
+  },
+)
+
+if (process.env.NODE_ENV === 'test') {
+  exports.__test = { approvedPlanModel, validateInterviewReport, redactTranscriptContactDetails }
+}
 
 exports.validateGeminiKey = onCall(
   FUNCTION_OPTIONS,

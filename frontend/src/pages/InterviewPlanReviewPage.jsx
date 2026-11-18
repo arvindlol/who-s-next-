@@ -126,6 +126,10 @@ export default function InterviewPlanReviewPage() {
   )
   const { sections, questions, coverage, resumePoints, plannedMinutes } = planModel
   const coveredTopics = coverage.filter(item => item.count > 0).length
+  const isApproved = Boolean(
+    interview?.approvedAt
+    && Number(interview?.approvedPlanVersion) === Number(interview?.planVersion),
+  )
 
   const approvePlan = async () => {
     if (approving || !interview?.planVersion) return
@@ -210,11 +214,13 @@ export default function InterviewPlanReviewPage() {
           <div>
             <span className="eyebrow">Interviews / {interview.candidateName} / Plan</span>
             <h1>Interview plan · {interview.candidateName}</h1>
-            <div className="plan-review__status"><span className="dot" />Draft, not approved</div>
+            <div className={`plan-review__status ${isApproved ? 'is-approved' : ''}`}><span className="dot" />{isApproved ? 'Approved plan' : 'Draft, not approved'}</div>
             <p>{interview.jobTitle} · {interview.settings?.lengthMinutes || plannedMinutes} min · {questions.length} questions · Generated with {interview.plan.model || 'Gemini'}</p>
           </div>
           <div className="plan-review__header-actions">
-            <Link className="btn" to={`/interviews/${interviewId}/plan`}>Regenerate</Link>
+            {isApproved
+              ? <Link className="btn btn--primary" to={`/interviews/${interviewId}/transcript`}>Continue to transcript</Link>
+              : <Link className="btn" to={`/interviews/${interviewId}/plan`}>Regenerate</Link>}
           </div>
         </header>
 
@@ -240,7 +246,7 @@ export default function InterviewPlanReviewPage() {
               <dl>
                 <div><dt>Version</dt><dd>{interview.planVersion || 1}</dd></div>
                 <div><dt>Model</dt><dd>{interview.plan.model || 'Gemini'}</dd></div>
-                <div><dt>Status</dt><dd>Draft</dd></div>
+                <div><dt>Status</dt><dd>{isApproved ? 'Approved' : 'Draft'}</dd></div>
               </dl>
             </section>
 
@@ -299,8 +305,10 @@ export default function InterviewPlanReviewPage() {
             ))}
 
             <div className="generated-plan__actions glass">
-              <span>Approval locks this plan version and opens the transcript step.</span>
-              <button className="btn btn--primary" type="button" onClick={approvePlan} disabled={approving || !interview.planVersion}>{approving ? 'Approving…' : 'Approve plan'}</button>
+              <span>{isApproved ? 'This approved plan is read-only. You can return here from the transcript whenever you need to review the questions.' : 'Approval locks this plan version and opens the transcript step.'}</span>
+              {isApproved
+                ? <Link className="btn btn--primary" to={`/interviews/${interviewId}/transcript`}>Back to transcript</Link>
+                : <button className="btn btn--primary" type="button" onClick={approvePlan} disabled={approving || !interview.planVersion}>{approving ? 'Approving…' : 'Approve plan'}</button>}
             </div>
             {approvalError && <div className="plan-error" role="alert">{approvalError}</div>}
           </section>

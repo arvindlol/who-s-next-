@@ -17,12 +17,15 @@ const STATUS_DETAILS = {
   draft: { label: 'Plan needed', tone: 'warn', step: 1, action: 'Create plan' },
   plan_needed: { label: 'Plan needed', tone: 'warn', step: 1, action: 'Create plan' },
   plan_ready: { label: 'Plan ready', tone: 'live', step: 2, action: 'Open plan' },
+  plan_approved: { label: 'Awaiting transcript', tone: 'warn', step: 4, action: 'Add transcript' },
   approved: { label: 'Plan approved', tone: 'live', step: 3, action: 'View plan' },
   scheduled: { label: 'Interview external', tone: 'live', step: 3, action: 'View plan' },
   invited: { label: 'Interview external', tone: 'live', step: 3, action: 'View plan' },
   in_progress: { label: 'Interview external', tone: 'warn', step: 3, action: 'View plan' },
   completed: { label: 'Awaiting transcript', tone: 'warn', step: 4, action: 'Add transcript' },
   awaiting_transcript: { label: 'Awaiting transcript', tone: 'warn', step: 4, action: 'Add transcript' },
+  transcript_ready: { label: 'Transcript ready', tone: 'warn', step: 4, action: 'Generate report' },
+  report_generating: { label: 'Generating report', tone: 'live', step: 5, action: 'Open report' },
   report_ready: { label: 'Report ready', tone: 'ok', step: 5, action: 'View report' },
   reviewed: { label: 'Reviewed', tone: 'ok', step: 5, action: 'View report' },
   selected: { label: 'Selected', tone: 'ok', step: 5, action: 'View report' },
@@ -45,6 +48,18 @@ function statusDetails(value) {
 
 function timestampValue(timestamp) {
   return timestamp?.toMillis?.() || Number(timestamp) || 0
+}
+
+function interviewActionRoute(interview, details) {
+  const key = statusKey(interview.status)
+  if (['report_ready', 'report_generating', 'reviewed', 'selected', 'rejected'].includes(key)) {
+    return `/interviews/${interview.id}/report`
+  }
+  if (['plan_approved', 'completed', 'awaiting_transcript', 'transcript_ready'].includes(key)) {
+    return `/interviews/${interview.id}/transcript`
+  }
+  if (details.step === 2 || interview.plan) return `/interviews/${interview.id}/review`
+  return `/interviews/${interview.id}/plan`
 }
 
 export default function InterviewsPage() {
@@ -207,11 +222,7 @@ export default function InterviewsPage() {
                           </td>
                           <td data-label="Status"><span className={`pill pill--${details.tone}`}><span className="dot" />{details.label}</span></td>
                           <td className="interviews-table__action">
-                            {details.step <= 2 || interview.plan ? (
-                              <Link className="btn btn--small" to={interview.plan ? `/interviews/${interview.id}/review` : `/interviews/${interview.id}/plan`}>{details.action}</Link>
-                            ) : (
-                              <button className="btn btn--small" type="button" disabled title="This part of the workflow comes in a later phase.">{details.action}</button>
-                            )}
+                            <Link className="btn btn--small" to={interviewActionRoute(interview, details)}>{details.action}</Link>
                           </td>
                         </tr>
                       )

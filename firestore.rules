@@ -41,6 +41,13 @@ service cloud.firestore {
         && resource.data.ownerId == request.auth.uid;
     }
 
+    // Final interview reports are written only by trusted backend functions.
+    // Recruiters can read only reports that belong to their own account.
+    match /interviewReports/{reportId} {
+      allow read: if signedIn()
+        && resource.data.ownerId == request.auth.uid;
+    }
+
     match /matches/{matchId} {
       allow read: if signedIn()
         && resource.data.ownerId == request.auth.uid;
