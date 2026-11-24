@@ -47,6 +47,7 @@ const LEGACY_INTERVIEW_STATUSES = {
   in_progress: 'plan_approved',
   completed: 'transcript_submitted',
   awaiting_transcript: 'plan_approved',
+  transcript_ready: 'plan_approved',
   reviewed: 'decided',
 }
 

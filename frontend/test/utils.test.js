@@ -13,6 +13,11 @@ import {
 } from '../src/utils/candidateModel.js'
 import { normalizeStage, stageTone, interviewStatusDetails, interviewStatusKey, isInterviewPending } from '../src/constants/statuses.js'
 import { callableErrorMessage } from '../src/services/errorMessages.js'
+import {
+  legacyDecisionLabel,
+  normalizeInterviewReportDocument,
+  normalizeTranscriptDocument,
+} from '../src/utils/interviewReport.js'
 
 test('CSV parsing handles quotes, commas, new lines and BOM', () => {
   const rows = parseCsv('﻿Name,Notes\r\n"Asha, R","Line 1\nLine ""2"""\r\nBen,')
@@ -76,6 +81,14 @@ test('stage and interview status helpers', () => {
   assert.equal(stageTone('Hired'), 'live')
   assert.equal(interviewStatusKey('approved'), 'plan_approved')
   assert.equal(interviewStatusDetails({ id: 'i1', status: 'plan_approved' }).step, 3)
+  assert.deepEqual(
+    interviewStatusDetails({ id: 'i1', status: 'transcript_ready' }),
+    { label: 'Ready for transcript', tone: 'live', step: 4, action: 'Open transcript', to: '/interviews/i1/transcript' },
+  )
+  assert.deepEqual(
+    interviewStatusDetails({ id: 'i1', status: 'report_generating' }),
+    { label: 'Generating report', tone: 'warn', step: 5, action: 'View progress', to: '/interviews/i1/transcript' },
+  )
   assert.equal(interviewStatusDetails({ id: 'i1', status: 'report_ready' }).to, '/interviews/i1/report')
   assert.equal(interviewStatusDetails({ id: 'i1', status: 'decided', decision: 'reject' }).tone, 'danger')
   assert.equal(isInterviewPending('plan_ready'), true)
@@ -87,4 +100,42 @@ test('callable errors show the server message when it is safe to', () => {
   assert.match(callableErrorMessage({ code: 'functions/unauthenticated' }), /sign in/i)
   assert.match(callableErrorMessage({ code: 'functions/not-found', message: 'x' }, 'fallback'), /x|not deployed/)
   assert.equal(callableErrorMessage({ code: 'weird' }, 'Fallback text'), 'Fallback text')
+})
+
+test('legacy interview report documents are adapted for the current report page', () => {
+  const report = normalizeInterviewReportDocument({
+    id: 'i1',
+    candidateName: 'Alex',
+    humanDecision: { decision: 'Move to offer', note: 'Strong evidence' },
+    report: {
+      overallScore: 4,
+      aiSuggestion: { decision: 'Move to offer', reason: 'Meets the role' },
+      planCoverage: { covered: 1, total: 2 },
+      evidenceStrength: { level: 'High', reason: 'Specific examples' },
+      summary: 'Good fit',
+      scoresByArea: [{ area: 'Java', score: 4 }],
+      questions: [
+        { number: 1, topic: 'Java', status: 'covered', score: 4, whatTheySaid: 'Used streams', evidenceQuotes: ['I used streams'] },
+        { number: 2, topic: 'Testing', status: 'not_covered', score: null, whatTheySaid: '', evidenceQuotes: [] },
+      ],
+      strengths: [{ title: 'Java', description: 'Strong Java evidence', quote: 'I used streams', question: 1 }],
+      concerns: [{ title: 'Testing', explanation: 'Not discussed', suggestedFollowUp: 'Ask about tests' }],
+    },
+  })
+
+  assert.equal(report.overallScore, 4)
+  assert.equal(report.suggestion.label, 'Move to offer')
+  assert.equal(report.askedQuestions, 1)
+  assert.equal(report.plannedQuestions, 2)
+  assert.equal(report.questions[0].asked, true)
+  assert.equal(report.questions[1].asked, false)
+  assert.equal(report.decision.value, 'offer')
+  assert.equal(legacyDecisionLabel('reject'), 'Do not progress')
+})
+
+test('legacy transcript fields are adapted for the current transcript page', () => {
+  assert.deepEqual(
+    normalizeTranscriptDocument({ transcript: 'Text', interviewerNotes: 'Note', removeContactDetails: false }),
+    { transcript: 'Text', interviewerNotes: 'Note', removeContactDetails: false, notes: 'Note', redacted: false },
+  )
 })

@@ -156,7 +156,9 @@ export default function InterviewReportPage() {
 
   if (!report) {
     const canGenerate = status === INTERVIEW_STATUS.TRANSCRIPT_SUBMITTED
-    const running = generating || interview.reportGeneration?.status === 'running'
+    const running = generating
+      || status === INTERVIEW_STATUS.REPORT_GENERATING
+      || interview.reportGeneration?.status === 'running'
     const generate = async () => {
       setGenerating(true)
       try {
@@ -171,8 +173,12 @@ export default function InterviewReportPage() {
       <Shell>
         <div className="workflow-notice" role="note">
           <b>No final report yet</b>
-          <span>{canGenerate ? 'The transcript is saved. Generate the report to see scores and evidence.' : 'Add the interview transcript first.'}</span>
-          {canGenerate ? (
+          <span>{running
+            ? 'The transcript is saved and the report is being generated.'
+            : canGenerate
+              ? 'The transcript is saved. Generate the report to see scores and evidence.'
+              : 'Add the interview transcript first.'}</span>
+          {canGenerate || running ? (
             <button type="button" className="btn btn--small btn--primary" onClick={generate} disabled={running}>{running ? 'Generating…' : 'Generate report'}</button>
           ) : (
             <Link className="btn btn--small" to={`/interviews/${interviewId}/transcript`}>Add transcript</Link>

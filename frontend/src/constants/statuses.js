@@ -39,7 +39,9 @@ export const INTERVIEW_STATUS = {
   PLAN_NEEDED: 'plan_needed',
   PLAN_READY: 'plan_ready',
   PLAN_APPROVED: 'plan_approved',
+  TRANSCRIPT_READY: 'transcript_ready',
   TRANSCRIPT_SUBMITTED: 'transcript_submitted',
+  REPORT_GENERATING: 'report_generating',
   REPORT_READY: 'report_ready',
   DECIDED: 'decided',
 }
@@ -84,7 +86,9 @@ export function interviewStatusDetails(interview) {
     plan_needed: { label: 'Plan needed', tone: 'warn', step: 1, action: 'Create plan', to: `/interviews/${id}/plan` },
     plan_ready: { label: 'Plan ready for review', tone: 'live', step: 2, action: 'Review plan', to: `/interviews/${id}/review` },
     plan_approved: { label: 'Plan approved', tone: 'live', step: 3, action: 'Add transcript', to: `/interviews/${id}/transcript` },
+    transcript_ready: { label: 'Ready for transcript', tone: 'live', step: 4, action: 'Open transcript', to: `/interviews/${id}/transcript` },
     transcript_submitted: { label: 'Transcript added', tone: 'warn', step: 4, action: 'Generate report', to: `/interviews/${id}/transcript` },
+    report_generating: { label: 'Generating report', tone: 'warn', step: 5, action: 'View progress', to: `/interviews/${id}/transcript` },
     report_ready: { label: 'Report ready', tone: 'ok', step: 5, action: 'View report', to: `/interviews/${id}/report` },
     decided: { label: decisionLabel ? `Decided: ${decisionLabel}` : 'Decided', tone: interview?.decision === 'reject' ? 'danger' : 'ok', step: 5, action: 'View report', to: `/interviews/${id}/report` },
   }

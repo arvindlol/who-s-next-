@@ -3,6 +3,11 @@ import { db } from '../firebase.js'
 import { api } from './api.js'
 import { callableErrorMessage } from './errorMessages.js'
 import { timestampMs } from '../utils/format.js'
+import {
+  legacyDecisionLabel,
+  normalizeInterviewReportDocument,
+  normalizeTranscriptDocument,
+} from '../utils/interviewReport.js'
 
 export const startInterviewPlan = (screeningId, candidateId) => api.startInterviewPlan({ screeningId, candidateId })
 export const generateInterviewPlan = (interviewId, configuration, replaceApproved = false) =>
@@ -10,9 +15,19 @@ export const generateInterviewPlan = (interviewId, configuration, replaceApprove
 export const updateInterviewPlan = (interviewId, planVersion, sections, replaceApproved = false) =>
   api.updateInterviewPlan({ interviewId, planVersion, sections, replaceApproved })
 export const approveInterviewPlan = (interviewId, planVersion) => api.approveInterviewPlan({ interviewId, planVersion })
-export const submitTranscript = input => api.submitTranscript(input)
+export const submitTranscript = ({ interviewId, transcript, notes, redactContacts, approvedPlanVersion }) => api.submitTranscript({
+  interviewId,
+  transcript,
+  approvedPlanVersion,
+  interviewerNotes: notes,
+  removeContactDetails: redactContacts,
+})
 export const generateFinalReport = interviewId => api.generateFinalReport({ interviewId })
-export const saveHiringDecision = (interviewId, decision, reason) => api.saveHiringDecision({ interviewId, decision, reason })
+export const saveHiringDecision = (interviewId, decision, reason) => api.saveHiringDecision({
+  interviewId,
+  decision: legacyDecisionLabel(decision),
+  note: reason,
+})
 
 export function interviewErrorMessage(error, fallback = 'Could not complete this interview step. Please try again.') {
   return callableErrorMessage(error, fallback)
@@ -59,7 +74,7 @@ export function latestInterviewsByCandidate(interviews) {
 export function subscribeToTranscript(interviewId, onChange, onError) {
   return onSnapshot(
     doc(db, 'interviewTranscripts', interviewId),
-    snapshot => onChange(snapshot.exists() ? snapshot.data() : null),
+    snapshot => onChange(snapshot.exists() ? normalizeTranscriptDocument(snapshot.data()) : null),
     onError,
   )
 }
@@ -67,7 +82,9 @@ export function subscribeToTranscript(interviewId, onChange, onError) {
 export function subscribeToReport(interviewId, onChange, onError) {
   return onSnapshot(
     doc(db, 'interviewReports', interviewId),
-    snapshot => onChange(snapshot.exists() ? { id: snapshot.id, ...snapshot.data() } : null),
+    snapshot => onChange(snapshot.exists()
+      ? normalizeInterviewReportDocument({ id: snapshot.id, ...snapshot.data() })
+      : null),
     onError,
   )
 }
@@ -75,7 +92,7 @@ export function subscribeToReport(interviewId, onChange, onError) {
 export function subscribeToReports(uid, onChange, onError) {
   return onSnapshot(
     query(collection(db, 'interviewReports'), where('ownerId', '==', uid), orderBy('generatedAt', 'desc')),
-    snapshot => onChange(snapshot.docs.map(item => ({ id: item.id, ...item.data() }))),
+    snapshot => onChange(snapshot.docs.map(item => normalizeInterviewReportDocument({ id: item.id, ...item.data() }))),
     onError,
   )
 }

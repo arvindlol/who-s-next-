@@ -398,7 +398,7 @@ export default function InterviewPlanReviewPage() {
               </>
             ) : (
               <>
-                <span>This plan was used for the interview and can no longer change.</span>
+                <span>This approved plan is locked so the transcript and report stay connected to these exact questions.</span>
                 <Link className="btn btn--primary" to={nextStep.to}>{nextStep.action}</Link>
               </>
             )}

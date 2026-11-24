@@ -22,7 +22,7 @@ const ENFORCE_APP_CHECK = env.ENFORCE_APP_CHECK === 'true'
 const GEMINI = {
   baseUrl: 'https://generativelanguage.googleapis.com',
   keyCheckTimeoutMs: 10_000,
-  generationTimeoutMs: 120_000,
+  generationTimeoutMs: 180_000,
   maxAttempts: 4,
   retryDelaysMs: [2_000, 5_000, 10_000],
   retryableStatuses: new Set([500, 502, 503, 504]),

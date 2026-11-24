@@ -19,6 +19,7 @@ const { recordCandidateEvent } = require('../services/candidateEvents')
 const GENERATION_LOCK_MS = 10 * 60 * 1000
 const TRANSCRIPT_STATUSES = new Set([
   INTERVIEW_STATUS.PLAN_APPROVED,
+  'transcript_ready', // Legacy value: an approved plan waiting for its transcript.
   INTERVIEW_STATUS.TRANSCRIPT_SUBMITTED,
   INTERVIEW_STATUS.REPORT_READY,
 ])
@@ -88,7 +89,8 @@ const submitTranscript = callable('submitTranscript', {}, async (data, { uid }) 
 // generateFinalReport — evaluates the transcript against the approved plan
 // ---------------------------------------------------------------------------
 const generateFinalReport = callable('generateFinalReport', {
-  timeoutSeconds: 600,
+  // Four Gemini attempts may each use the configured 180-second generation timeout.
+  timeoutSeconds: 900,
   memory: '512MiB',
   secrets: [ENCRYPTION_SECRET],
 }, async (data, { uid }) => {

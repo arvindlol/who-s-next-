@@ -105,11 +105,20 @@ export default function InterviewTranscriptPage() {
   }
 
   const status = interviewStatusKey(interview.status)
-  const planApproved = [INTERVIEW_STATUS.PLAN_APPROVED, INTERVIEW_STATUS.TRANSCRIPT_SUBMITTED, INTERVIEW_STATUS.REPORT_READY, INTERVIEW_STATUS.DECIDED].includes(status)
+  const planApproved = [
+    INTERVIEW_STATUS.PLAN_APPROVED,
+    INTERVIEW_STATUS.TRANSCRIPT_READY,
+    INTERVIEW_STATUS.TRANSCRIPT_SUBMITTED,
+    INTERVIEW_STATUS.REPORT_GENERATING,
+    INTERVIEW_STATUS.REPORT_READY,
+    INTERVIEW_STATUS.DECIDED,
+  ].includes(status)
   const decided = status === INTERVIEW_STATUS.DECIDED
   const hasSubmitted = Boolean(saved?.transcript)
   const changedSinceSubmit = hasSubmitted && (saved.transcript !== transcript || (saved.notes || '') !== notes)
-  const reportRunning = interview.reportGeneration?.status === 'running' || busy === 'report'
+  const reportRunning = status === INTERVIEW_STATUS.REPORT_GENERATING
+    || interview.reportGeneration?.status === 'running'
+    || busy === 'report'
   const wordCount = transcript.trim() ? transcript.trim().split(/\s+/).length : 0
   const totalQuestions = interview.plan?.totalQuestions || (interview.plan?.sections || []).reduce((total, section) => total + (section.questions?.length || 0), 0)
 
@@ -134,7 +143,13 @@ export default function InterviewTranscriptPage() {
     setBusy('submit')
     setMessage({ type: '', text: '' })
     try {
-      const result = await submitTranscript({ interviewId, transcript, notes, redactContacts: redact })
+      const result = await submitTranscript({
+        interviewId,
+        transcript,
+        notes,
+        redactContacts: redact,
+        approvedPlanVersion: Number(interview.approvedPlanVersion || interview.planVersion || 0),
+      })
       writeSession(draftKey, '')
       writeSession(notesKey, '')
       const removed = (result.redactions?.emails || 0) + (result.redactions?.phones || 0)
