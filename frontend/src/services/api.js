@@ -16,9 +16,9 @@ export const api = {
   approveInterviewPlan: callable('approveInterviewPlan', 70_000),
   // These are the report Function names currently deployed in Firebase.
   // Keep the local API names stable so the pages do not depend on deployment names.
-  submitTranscript: callable('saveInterviewTranscript', 70_000),
-  generateFinalReport: callable('generateInterviewReport', 960_000),
-  saveHiringDecision: callable('recordInterviewDecision', 70_000),
+  submitTranscript: callable('submitTranscript', 70_000),
+generateFinalReport: callable('generateFinalReport', 960_000),
+saveHiringDecision: callable('saveHiringDecision', 70_000),
   deleteCandidate: callable('deleteCandidate', 320_000),
   deleteJob: callable('deleteJob', 320_000),
   deleteAccount: callable('deleteAccount', 560_000),

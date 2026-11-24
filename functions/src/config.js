@@ -10,7 +10,7 @@ const REGION = 'asia-south1'
 const MODELS = {
   screening: env.GEMINI_SCREENING_MODEL || 'gemini-3.8-flash',
   interview: env.GEMINI_INTERVIEW_MODEL || 'gemini-3.7-flash',
-  report: env.GEMINI_REPORT_MODEL || env.GEMINI_INTERVIEW_MODEL || 'gemini-3.7-flash',
+  report: env.GEMINI_REPORT_MODEL || 'gemini-3.6-flash',
 }
 
 // Mock Gemini is only possible inside the Functions emulator, never in production.

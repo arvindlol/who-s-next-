@@ -15,18 +15,17 @@ export const generateInterviewPlan = (interviewId, configuration, replaceApprove
 export const updateInterviewPlan = (interviewId, planVersion, sections, replaceApproved = false) =>
   api.updateInterviewPlan({ interviewId, planVersion, sections, replaceApproved })
 export const approveInterviewPlan = (interviewId, planVersion) => api.approveInterviewPlan({ interviewId, planVersion })
-export const submitTranscript = ({ interviewId, transcript, notes, redactContacts, approvedPlanVersion }) => api.submitTranscript({
+export const submitTranscript = ({ interviewId, transcript, notes, redactContacts }) => api.submitTranscript({
   interviewId,
   transcript,
-  approvedPlanVersion,
-  interviewerNotes: notes,
-  removeContactDetails: redactContacts,
+  notes,
+  redactContacts,
 })
 export const generateFinalReport = interviewId => api.generateFinalReport({ interviewId })
 export const saveHiringDecision = (interviewId, decision, reason) => api.saveHiringDecision({
   interviewId,
-  decision: legacyDecisionLabel(decision),
-  note: reason,
+  decision,
+  reason,
 })
 
 export function interviewErrorMessage(error, fallback = 'Could not complete this interview step. Please try again.') {
