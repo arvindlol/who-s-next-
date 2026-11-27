@@ -1707,7 +1707,7 @@ export default function Candidates() {
                     </th>
                     <th>Candidate</th>
                     <th>Role</th>
-                    <th>Status</th>
+                    
                     <th>Added</th>
                     <th>
                       <span className="visually-hidden">Actions</span>
@@ -1751,9 +1751,7 @@ export default function Candidates() {
 
                         <td data-label="Role">{candidate.role}</td>
 
-                        <td data-label="Status">
-                          <StatusBadge status={candidate.status} />
-                        </td>
+                        
 
                         <td data-label="Added">{formatDate(candidate.createdMs)}</td>
 
